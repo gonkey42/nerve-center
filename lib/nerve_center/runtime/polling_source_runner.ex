@@ -165,7 +165,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
   end
 
   defp handle_failure(state, reason) do
-    backoff_ms = next_backoff_ms(state)
+    backoff_ms = next_backoff_ms(state, reason)
     AppHealth.record_source_failure(state.device.id, state.source.name, reason, backoff_ms)
     observed_at = DateTime.utc_now()
 
@@ -223,13 +223,39 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     }
   end
 
-  defp next_backoff_ms(state) do
+  defp next_backoff_ms(state, reason) do
+    if auth_error?(reason) do
+      next_auth_backoff_ms(state)
+    else
+      next_standard_backoff_ms(state)
+    end
+  end
+
+  defp next_standard_backoff_ms(state) do
     base =
       cond do
         state.backoff_ms > 0 -> min(state.backoff_ms * 2, 300_000)
         true -> min(state.interval_ms, 300_000)
       end
 
+    apply_jitter(base)
+  end
+
+  defp next_auth_backoff_ms(state) do
+    base =
+      cond do
+        state.backoff_ms >= 60_000 -> min(state.backoff_ms * 2, 900_000)
+        true -> 60_000
+      end
+
+    apply_jitter(base)
+  end
+
+  defp auth_error?({:auth, _status, _body}), do: true
+  defp auth_error?({:auth, _reason}), do: true
+  defp auth_error?(_reason), do: false
+
+  defp apply_jitter(base) do
     jitter = round(base * 0.15)
     max(base + :rand.uniform(jitter * 2 + 1) - jitter - 1, 1_000)
   end

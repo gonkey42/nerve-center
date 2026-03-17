@@ -3,17 +3,21 @@ defmodule NerveCenter.Sources.Support do
 
   def request_json(url, opts \\ []) do
     headers = Keyword.get(opts, :headers, [])
+    method = Keyword.get(opts, :method, :get)
+    json = Keyword.get(opts, :json, :unset)
 
     request_opts =
       [
+        method: method,
         url: url,
         headers: headers ++ [{"accept", "application/json"}],
         receive_timeout: 5_000,
         connect_options: [timeout: 5_000],
         retry: false
       ]
+      |> maybe_put_json(json)
 
-    case Req.get(request_opts) do
+    case Req.request(request_opts) do
       {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
         {:ok, body}
 
@@ -27,6 +31,9 @@ defmodule NerveCenter.Sources.Support do
         {:error, {:request, Exception.message(exception)}}
     end
   end
+
+  defp maybe_put_json(opts, :unset), do: opts
+  defp maybe_put_json(opts, json), do: Keyword.put(opts, :json, json)
 
   def first_present(map, keys, default \\ nil)
 
@@ -46,11 +53,20 @@ defmodule NerveCenter.Sources.Support do
   end
 
   def ratio_from_percent(value) when is_number(value), do: value / 100
-  def ratio_from_percent(value) when is_binary(value), do: String.to_float(value) / 100
+  def ratio_from_percent(value) when is_binary(value), do: to_float(value) / 100
 
   def to_float(value) when is_float(value), do: value
   def to_float(value) when is_integer(value), do: value / 1
-  def to_float(value) when is_binary(value), do: String.to_float(value)
+
+  def to_float(value) when is_binary(value) do
+    case Float.parse(value) do
+      {parsed, ""} ->
+        parsed
+
+      :error ->
+        String.to_integer(value) / 1
+    end
+  end
 
   def to_integer(value) when is_integer(value), do: value
   def to_integer(value) when is_float(value), do: round(value)

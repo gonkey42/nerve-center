@@ -64,7 +64,7 @@ config :nerve_center, :devices, [
       %{
         name: :pihole,
         module: NerveCenter.Sources.Kitt.PiHoleSource,
-        enabled: false,
+        enabled: true,
         interval_ms: 30_000
       }
     ]
@@ -75,7 +75,7 @@ config :nerve_center, :devices, [
     hostname: "kitt",
     ip: "100.97.130.40",
     display_order: 3,
-    enabled: false,
+    enabled: true,
     offline_expected: false,
     hub_module: NerveCenter.Devices.UpsHub,
     nut_host: "100.97.130.40",
@@ -85,7 +85,7 @@ config :nerve_center, :devices, [
       %{
         name: :nut,
         module: NerveCenter.Sources.Ups.NUTSource,
-        enabled: false,
+        enabled: true,
         interval_ms: 30_000
       }
     ]

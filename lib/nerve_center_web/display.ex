@@ -1,6 +1,8 @@
 defmodule NerveCenterWeb.Display do
   @moduledoc false
 
+  alias NerveCenter.Metrics.Catalog
+
   def percent(nil), do: "-"
   def percent(value) when is_number(value), do: "#{Float.round(value * 100, 1)}%"
 
@@ -24,6 +26,31 @@ defmodule NerveCenterWeb.Display do
       days > 0 -> "#{days}d #{hours}h"
       hours > 0 -> "#{hours}h #{minutes}m"
       true -> "#{minutes}m"
+    end
+  end
+
+  def volts(nil), do: "-"
+  def volts(value) when is_number(value), do: "#{Float.round(value / 1, 1)} V"
+
+  def count(nil), do: "-"
+  def count(value) when is_integer(value), do: Integer.to_string(value)
+  def count(value) when is_float(value), do: Integer.to_string(round(value))
+
+  def boolean(nil), do: "-"
+  def boolean(0), do: "No"
+  def boolean(value) when is_number(value) and value > 0, do: "Yes"
+
+  def metric(metric_id, value) do
+    case Catalog.definition(metric_id) do
+      %{display_format: :percent} -> percent(value)
+      %{display_format: :bytes} -> bytes(value)
+      %{display_format: :throughput} -> throughput(value)
+      %{display_format: :duration} -> duration(value)
+      %{display_format: :boolean} -> boolean(value)
+      %{display_format: :volts} -> volts(value)
+      %{display_format: :count} -> count(value)
+      %{display_format: :fps} -> count(value)
+      _ -> to_string(value || "-")
     end
   end
 

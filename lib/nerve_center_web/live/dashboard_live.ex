@@ -45,7 +45,7 @@ defmodule NerveCenterWeb.DashboardLive do
               HAL9000 Read-Only Dashboard
             </h1>
             <p class="max-w-2xl text-sm text-stone-300">
-              Live state for the Phase 1a devices, sourced locally from HAL9000 and remotely from KITT.
+              Live state for the Phase 1a and Phase 1b devices, sourced locally from HAL9000 and remotely from KITT.
             </p>
           </div>
           <nav class="flex gap-3 text-sm">
@@ -75,7 +75,14 @@ defmodule NerveCenterWeb.DashboardLive do
           <div class="flex items-start justify-between border-b border-stone-800 px-6 py-5">
             <div>
               <p class="text-xs uppercase tracking-[0.3em] text-stone-400">{device.hostname}</p>
-              <h2 class="mt-2 text-2xl font-semibold text-stone-50">{device.label}</h2>
+              <h2 class="mt-2 text-2xl font-semibold text-stone-50">
+                <.link
+                  navigate={~p"/devices/#{Atom.to_string(device.id)}"}
+                  class="transition hover:text-amber-300"
+                >
+                  {device.label}
+                </.link>
+              </h2>
               <p class="mt-1 text-sm text-stone-400">{device.ip}</p>
             </div>
             <span class={[
@@ -87,36 +94,85 @@ defmodule NerveCenterWeb.DashboardLive do
           </div>
 
           <div class="flex flex-col gap-5 px-6 py-5">
-            <div class="grid gap-3 sm:grid-cols-2">
-              <.metric label="CPU" value={Display.percent(snapshot.metrics[:cpu_util_ratio])} />
+            <%= if device.id == :ups do %>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <.metric
+                  label="Battery"
+                  value={Display.percent(snapshot.metrics[:ups_battery_charge_ratio])}
+                />
+                <.metric
+                  label="Runtime"
+                  value={Display.duration(snapshot.metrics[:ups_battery_runtime_seconds])}
+                />
+                <.metric label="Load" value={Display.percent(snapshot.metrics[:ups_load_ratio])} />
+                <.metric
+                  label="Input"
+                  value={Display.volts(snapshot.metrics[:ups_input_voltage_volts])}
+                />
+                <.metric
+                  label="Status"
+                  value={get_in(snapshot.sources, [:nut, Access.key(:data), :status]) || "-"}
+                />
+                <.metric
+                  label="On Battery"
+                  value={Display.boolean(snapshot.metrics[:ups_on_battery_flag])}
+                />
+              </div>
+            <% else %>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <.metric label="CPU" value={Display.percent(snapshot.metrics[:cpu_util_ratio])} />
+                <.metric
+                  label="Memory"
+                  value={
+                    memory_display(
+                      snapshot.metrics[:memory_used_bytes],
+                      snapshot.metrics[:memory_total_bytes]
+                    )
+                  }
+                />
+                <.metric
+                  label="Disk"
+                  value={
+                    memory_display(
+                      snapshot.metrics[:disk_used_bytes],
+                      snapshot.metrics[:disk_total_bytes]
+                    )
+                  }
+                />
+                <.metric
+                  label="Network"
+                  value={
+                    "#{Display.throughput(snapshot.metrics[:network_rx_bytes_per_sec])} / #{Display.throughput(snapshot.metrics[:network_tx_bytes_per_sec])}"
+                  }
+                />
+                <.metric label="Uptime" value={Display.duration(snapshot.metrics[:uptime_seconds])} />
+                <.metric
+                  :if={not is_nil(snapshot.metrics[:plex_active_streams_count])}
+                  label="Plex"
+                  value={to_string(snapshot.metrics[:plex_active_streams_count]) <> " active"}
+                />
+              </div>
+            <% end %>
+
+            <div
+              :if={not is_nil(snapshot.metrics[:pihole_queries_today_count])}
+              class="grid gap-3 sm:grid-cols-2"
+            >
               <.metric
-                label="Memory"
-                value={
-                  memory_display(
-                    snapshot.metrics[:memory_used_bytes],
-                    snapshot.metrics[:memory_total_bytes]
-                  )
-                }
+                label="Pi-hole Blocking"
+                value={Display.boolean(snapshot.metrics[:pihole_blocking_enabled_flag])}
               />
               <.metric
-                label="Disk"
-                value={
-                  memory_display(
-                    snapshot.metrics[:disk_used_bytes],
-                    snapshot.metrics[:disk_total_bytes]
-                  )
-                }
+                label="Queries Today"
+                value={to_string(snapshot.metrics[:pihole_queries_today_count] || 0)}
               />
               <.metric
-                label="Network"
-                value={
-                  "#{Display.throughput(snapshot.metrics[:network_rx_bytes_per_sec])} / #{Display.throughput(snapshot.metrics[:network_tx_bytes_per_sec])}"
-                }
+                label="Blocked Today"
+                value={to_string(snapshot.metrics[:pihole_blocked_queries_today_count] || 0)}
               />
-              <.metric label="Uptime" value={Display.duration(snapshot.metrics[:uptime_seconds])} />
               <.metric
-                label="Plex"
-                value={to_string(snapshot.metrics[:plex_active_streams_count] || 0) <> " active"}
+                label="Blocked Ratio"
+                value={Display.percent(snapshot.metrics[:pihole_blocked_ratio])}
               />
             </div>
 
@@ -128,18 +184,19 @@ defmodule NerveCenterWeb.DashboardLive do
                 <.utc_time value={snapshot.updated_at} class="text-xs text-stone-500" />
               </div>
               <div class="mt-3 flex flex-wrap gap-2">
-                <span
+                <.link
                   :for={
                     {source_name, source_snapshot} <-
                       Enum.sort_by(snapshot.sources, fn {name, _snapshot} -> name end)
                   }
+                  navigate={~p"/sources/#{Atom.to_string(device.id)}/#{Atom.to_string(source_name)}"}
                   class={[
-                    "rounded-full px-3 py-1 text-xs ring-1",
+                    "rounded-full px-3 py-1 text-xs ring-1 transition hover:border-stone-500",
                     Display.status_class(source_snapshot.status)
                   ]}
                 >
                   {source_name}: {source_snapshot.status}
-                </span>
+                </.link>
                 <span :if={map_size(snapshot.sources) == 0} class="text-sm text-stone-500">
                   Awaiting first successful poll.
                 </span>

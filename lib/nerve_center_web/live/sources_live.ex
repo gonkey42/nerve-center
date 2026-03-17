@@ -3,6 +3,7 @@ defmodule NerveCenterWeb.SourcesLive do
 
   alias NerveCenter.Runtime.AppHealth
   alias NerveCenter.Topology
+  alias NerveCenter.Topology
 
   @impl true
   def mount(_params, _session, socket) do
@@ -28,7 +29,7 @@ defmodule NerveCenterWeb.SourcesLive do
           <div>
             <h1 class="text-4xl font-semibold tracking-tight text-stone-50">App Health</h1>
             <p class="max-w-2xl text-sm text-stone-300">
-              Migration, persistence, and per-source failure state for the enabled Phase 1a sources.
+              Migration, persistence, and per-source failure state for the enabled Phase 1a and Phase 1b sources.
             </p>
           </div>
           <nav class="flex gap-3 text-sm">
@@ -88,7 +89,16 @@ defmodule NerveCenterWeb.SourcesLive do
                   end)
               }>
                 <td class="px-6 py-4 font-medium">{source.device_id}</td>
-                <td class="px-6 py-4">{source.source}</td>
+                <td class="px-6 py-4">
+                  <.link
+                    navigate={
+                      ~p"/sources/#{Atom.to_string(source.device_id)}/#{Atom.to_string(source.source)}"
+                    }
+                    class="text-stone-100 transition hover:text-amber-300"
+                  >
+                    {source.source}
+                  </.link>
+                </td>
                 <td class="px-6 py-4">
                   <.utc_time value={source.last_ok_at} class="text-stone-300" />
                 </td>

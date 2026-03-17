@@ -18,7 +18,9 @@ defmodule NerveCenterWeb.Router do
     pipe_through :browser
 
     live "/", DashboardLive, :index
+    live "/devices/:id", DeviceLive, :show
     live "/sources", SourcesLive, :index
+    live "/sources/:device_id/:source", SourceLive, :show
   end
 
   scope "/", NerveCenterWeb do

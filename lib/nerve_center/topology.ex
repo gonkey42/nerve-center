@@ -28,6 +28,14 @@ defmodule NerveCenter.Topology do
     ArgumentError -> raise ArgumentError, "unknown device #{inspect(device_id)}"
   end
 
+  def get_source!(device_id, source_name) do
+    device = get_device!(device_id)
+    source_name = normalize_source_name(source_name)
+
+    Enum.find(device.sources, &(&1.name == source_name)) ||
+      raise ArgumentError, "unknown source #{inspect(source_name)} for #{inspect(device.id)}"
+  end
+
   def enabled_sources do
     for device <- enabled_devices(),
         source <- Enum.filter(device.sources, & &1.enabled) do
@@ -45,5 +53,13 @@ defmodule NerveCenter.Topology do
 
   def app_health_topic do
     "app:health"
+  end
+
+  defp normalize_source_name(source_name) when is_atom(source_name), do: source_name
+
+  defp normalize_source_name(source_name) when is_binary(source_name) do
+    String.to_existing_atom(source_name)
+  rescue
+    ArgumentError -> raise ArgumentError, "unknown source #{inspect(source_name)}"
   end
 end

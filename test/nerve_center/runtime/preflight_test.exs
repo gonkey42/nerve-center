@@ -11,10 +11,11 @@ defmodule NerveCenter.Runtime.PreflightTest do
     assert "PUBLIC_HOST" in required_env
     assert "PLEX_TOKEN" in required_env
 
-    refute "PIHOLE_APP_PASSWORD" in required_env
+    assert "PIHOLE_APP_PASSWORD" in required_env
+    assert "NUT_USERNAME" in required_env
+    assert "NUT_PASSWORD" in required_env
     refute "IMMICH_API_KEY" in required_env
     refute "HA_TOKEN" in required_env
     refute "UNIFI_API_KEY" in required_env
-    refute "NUT_PASSWORD" in required_env
   end
 end
