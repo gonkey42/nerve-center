@@ -184,19 +184,19 @@ config :nerve_center, :devices, [
     ]
   },
   %{
-    id: :ubuntu_laptop,
+    id: :zoidberg,
     label: "Zoidberg",
     hostname: "zoidberg",
     ip: "100.126.22.36",
     display_order: 7,
     enabled: true,
     offline_expected: true,
-    hub_module: NerveCenter.Devices.UbuntuLaptopHub,
+    hub_module: NerveCenter.Devices.ZoidbergHub,
     glances_base_url: "http://100.126.22.36:61208",
     sources: [
       %{
         name: :glances,
-        module: NerveCenter.Sources.UbuntuLaptop.GlancesSource,
+        module: NerveCenter.Sources.Zoidberg.GlancesSource,
         enabled: true,
         interval_ms: 60_000
       }

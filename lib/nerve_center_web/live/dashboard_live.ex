@@ -123,7 +123,7 @@ defmodule NerveCenterWeb.DashboardLive do
                 <div class="grid gap-3 sm:grid-cols-2">
                   <.metric
                     label="WAN Status"
-                    value={Display.boolean(snapshot.metrics[:unifi_wan_up_flag])}
+                    value={get_in(snapshot.sources, [:unifi, Access.key(:data), :wan_status]) || "-"}
                   />
                   <.metric
                     label="Connected Clients"
@@ -385,7 +385,7 @@ defmodule NerveCenterWeb.DashboardLive do
   defp entity_state(%{state: state, unit_of_measurement: nil}), do: state
   defp entity_state(%{state: state, unit_of_measurement: unit}), do: "#{state} #{unit}"
 
-  defp system_card?(device_id), do: device_id in [:hal9000, :kitt, :rosie, :ubuntu_laptop]
+  defp system_card?(device_id), do: device_id in [:hal9000, :kitt, :rosie, :zoidberg]
 
   defp status_feed_label(snapshot) do
     case get_in(snapshot.sources, [:ha_web_socket, Access.key(:data), :connected?]) do

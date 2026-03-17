@@ -34,13 +34,11 @@ defmodule NerveCenter.Sources.Stig.UniFiSource do
     with {:ok, health} <-
            Support.request_json("#{api_base_url(context)}/stat/health", request_opts),
          {:ok, devices} <-
-           Support.request_json("#{api_base_url(context)}/stat/device", request_opts),
-         {:ok, clients} <- Support.request_json("#{api_base_url(context)}/stat/sta", request_opts) do
+           Support.request_json("#{api_base_url(context)}/stat/device", request_opts) do
       {:ok,
        %{
          health: response_data(health),
-         devices: response_data(devices),
-         clients: response_data(clients)
+         devices: response_data(devices)
        }}
     end
   end
@@ -48,9 +46,10 @@ defmodule NerveCenter.Sources.Stig.UniFiSource do
   @impl true
   def normalize(raw, _context) do
     wan = health_subsystem(raw.health, "wan")
+    lan = health_subsystem(raw.health, "lan")
+    www = health_subsystem(raw.health, "www")
     gateway = gateway(raw.devices)
-    clients = Enum.map(List.wrap(raw.clients), &client_entry/1)
-    connected_clients_count = length(clients)
+    connected_clients_count = connected_clients_count(wan, lan)
 
     gateway_cpu_ratio = percent_ratio(gateway_stats_value(gateway, wan, "cpu"))
     gateway_memory_ratio = percent_ratio(gateway_stats_value(gateway, wan, "mem"))
@@ -90,9 +89,13 @@ defmodule NerveCenter.Sources.Stig.UniFiSource do
            up: Support.first_present(gateway, [{:uplink, :up}], false),
            media: Support.first_present(gateway, [{:uplink, :media}], nil),
            ip: Support.first_present(gateway, [{:uplink, :ip}], nil),
-           latency_ms: Support.first_present(gateway, [{:uplink, :latency}], nil)
-         },
-         clients: clients
+           latency_ms:
+             Support.first_present(
+               gateway,
+               [{:uplink, :latency}],
+               Support.first_present(www, [:latency], nil)
+             )
+         }
        }
      }}
   end
@@ -145,26 +148,18 @@ defmodule NerveCenter.Sources.Stig.UniFiSource do
     Support.first_present(wan, [:wan_ip], Support.first_present(gateway, [{:uplink, :ip}], nil))
   end
 
-  defp client_entry(client) do
-    %{
-      name: Support.first_present(client, [:name], nil),
-      hostname: Support.first_present(client, [:hostname], nil),
-      ip: Support.first_present(client, [:ip], nil),
-      mac: Support.first_present(client, [:mac], nil),
-      wired?: Support.first_present(client, [:is_wired], false),
-      last_seen:
-        client
-        |> Support.first_present([:last_seen], nil)
-        |> unix_to_datetime()
-    }
-  end
+  defp connected_clients_count(wan, lan) do
+    wan
+    |> Support.first_present([:num_sta], nil)
+    |> case do
+      nil ->
+        Support.first_present(lan, [:num_user], 0) +
+          Support.first_present(lan, [:num_guest], 0) +
+          Support.first_present(lan, [:num_iot], 0)
 
-  defp unix_to_datetime(nil), do: nil
-
-  defp unix_to_datetime(value) do
-    value
-    |> Support.to_integer()
-    |> DateTime.from_unix!()
+      value ->
+        Support.to_integer(value)
+    end
   end
 
   defp flag(true), do: 1

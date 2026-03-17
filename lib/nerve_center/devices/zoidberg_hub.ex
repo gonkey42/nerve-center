@@ -1,4 +1,4 @@
-defmodule NerveCenter.Devices.UbuntuLaptopHub do
+defmodule NerveCenter.Devices.ZoidbergHub do
   @moduledoc false
 
   def child_spec(opts) do

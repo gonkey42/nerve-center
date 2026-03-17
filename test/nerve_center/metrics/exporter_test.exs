@@ -42,9 +42,9 @@ defmodule NerveCenter.Metrics.ExporterTest do
         }
       },
       %{
-        device: %{id: :ubuntu_laptop},
+        device: %{id: :zoidberg},
         snapshot: %DeviceSnapshot{
-          device_id: :ubuntu_laptop,
+          device_id: :zoidberg,
           label: "Zoidberg",
           status: :offline,
           updated_at: now,
@@ -52,7 +52,7 @@ defmodule NerveCenter.Metrics.ExporterTest do
           metrics: %{},
           sources: %{
             glances: %SourceSnapshot{
-              device_id: :ubuntu_laptop,
+              device_id: :zoidberg,
               source: :glances,
               status: :offline,
               observed_at: now,
@@ -77,6 +77,6 @@ defmodule NerveCenter.Metrics.ExporterTest do
     assert body =~ ~s(unifi_gateway_cpu_ratio{device_id="stig",source="unifi"} 0.057)
     assert body =~ ~s(unifi_wan_up_flag{device_id="stig",source="unifi"} 1)
     refute body =~ "unknown_phase3_metric"
-    refute body =~ ~s(cpu_util_ratio{device_id="ubuntu_laptop",source="glances"})
+    refute body =~ ~s(cpu_util_ratio{device_id="zoidberg",source="glances"})
   end
 end

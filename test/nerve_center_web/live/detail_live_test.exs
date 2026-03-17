@@ -39,7 +39,7 @@ defmodule NerveCenterWeb.DetailLiveTest do
   end
 
   test "device detail renders for zoidberg", %{conn: conn} do
-    {:ok, _view, html} = live(conn, ~p"/devices/ubuntu_laptop")
+    {:ok, _view, html} = live(conn, ~p"/devices/zoidberg")
 
     assert html =~ "Zoidberg"
     assert html =~ "Current Metrics"
@@ -63,6 +63,13 @@ defmodule NerveCenterWeb.DetailLiveTest do
     {:ok, _view, html} = live(conn, ~p"/sources/stig/unifi")
 
     assert html =~ "Stig / unifi"
+    assert html =~ "Health State"
+  end
+
+  test "source detail renders for the zoidberg glances source", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/sources/zoidberg/glances")
+
+    assert html =~ "Zoidberg / glances"
     assert html =~ "Health State"
   end
 end
