@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.claudebot.nerve-center</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/hal9000/NerveCenter/_build/prod/rel/nerve_center/bin/nerve_center</string>
+    <string>start</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/hal9000/NerveCenter/_build/prod/rel/nerve_center</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PHX_SERVER</key>
+    <string>true</string>
+    <key>SECRET_KEY_BASE</key>
+    <string>REPLACE_ME</string>
+    <key>RELEASE_COOKIE</key>
+    <string>REPLACE_ME</string>
+    <key>PUBLIC_HOST</key>
+    <string>REPLACE_ME</string>
+    <key>PIHOLE_APP_PASSWORD</key>
+    <string>REPLACE_ME</string>
+    <key>IMMICH_API_KEY</key>
+    <string>REPLACE_ME</string>
+    <key>HA_TOKEN</key>
+    <string>REPLACE_ME</string>
+    <key>UNIFI_API_KEY</key>
+    <string>REPLACE_ME</string>
+    <key>PLEX_TOKEN</key>
+    <string>REPLACE_ME</string>
+    <key>NUT_USERNAME</key>
+    <string>REPLACE_ME</string>
+    <key>NUT_PASSWORD</key>
+    <string>REPLACE_ME</string>
+  </dict>
+
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>/dev/null</string>
+</dict>
+</plist>
