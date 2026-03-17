@@ -56,7 +56,8 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
       last_payload: %{
         metrics: Map.get(source_snapshot, :metrics, %{}),
         data: Map.get(source_snapshot, :data, %{})
-      }
+      },
+      last_status: Map.get(source_snapshot, :status, :unknown)
     }
 
     {:ok, state, {:continue, :bootstrap}}
@@ -136,11 +137,14 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     backoff_ms = next_backoff_ms(state, reason)
     AppHealth.record_source_failure(state.device.id, state.source.name, reason, backoff_ms)
     observed_at = DateTime.utc_now()
+    status = failure_status(state, reason)
+
+    maybe_log_failure(state, status, reason, backoff_ms)
 
     source_snapshot = %SourceSnapshot{
       device_id: state.device.id,
       source: state.source.name,
-      status: failure_status(state, reason),
+      status: status,
       observed_at: observed_at,
       last_ok_at: state.last_ok_at,
       last_error_at: observed_at,
@@ -161,7 +165,8 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
       | consecutive_failures: state.consecutive_failures + 1,
         backoff_ms: backoff_ms,
         last_error_at: observed_at,
-        last_error: inspect(reason)
+        last_error: inspect(reason),
+        last_status: status
     }
   end
 
@@ -212,6 +217,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     }
 
     AppHealth.record_source_success(state.device.id, state.source.name, observed_at)
+    maybe_log_recovery(state)
     publish_source_snapshot(state, source_snapshot, observed_at)
     schedule_poll(state.interval_ms)
 
@@ -224,7 +230,8 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
         last_error_at: nil,
         ever_ok?: true,
         last_error: nil,
-        last_payload: %{metrics: metric_map, data: data}
+        last_payload: %{metrics: metric_map, data: data},
+        last_status: :ok
     }
   end
 
@@ -382,6 +389,28 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
 
       {:error, {:callback_crash, label, {kind, reason}}}
   end
+
+  defp maybe_log_failure(state, status, reason, backoff_ms) do
+    if state.consecutive_failures == 0 or state.last_status != status do
+      Logger.warning(
+        "polling source #{state.device.id}/#{state.source.name} entered #{status} " <>
+          "backoff=#{backoff_ms}ms last_ok_at=#{format_datetime(state.last_ok_at)} " <>
+          "reason=#{inspect(reason)}"
+      )
+    end
+  end
+
+  defp maybe_log_recovery(state) do
+    if state.consecutive_failures > 0 or state.last_status != :ok do
+      Logger.info(
+        "polling source #{state.device.id}/#{state.source.name} recovered after " <>
+          "#{state.consecutive_failures} failures last_error=#{state.last_error || "none"}"
+      )
+    end
+  end
+
+  defp format_datetime(nil), do: "never"
+  defp format_datetime(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
 
   defp schedule_bootstrap_poll(ms) do
     Process.send_after(self(), :bootstrap_poll, ms)

@@ -1,6 +1,8 @@
 defmodule NerveCenter.Runtime.StreamingSourceRunnerTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias NerveCenter.Messages.SourceSnapshotUpdated
   alias NerveCenter.Runtime.AppHealth
   alias NerveCenter.Runtime.StreamingSourceRunner
@@ -165,6 +167,33 @@ defmodule NerveCenter.Runtime.StreamingSourceRunnerTest do
     assert Process.alive?(runner)
 
     Task.await(server)
+  end
+
+  test "logs actionable connection failures" do
+    script =
+      start_supervised!({Agent, fn -> [{:error, :offline}] end})
+
+    device = test_device()
+
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.source_topic(device.id, :ha_web_socket))
+
+    log =
+      capture_log(fn ->
+        start_supervised!(
+          {StreamingSourceRunner,
+           module: FakeStreamingSource,
+           device: device,
+           source: %{name: :ha_web_socket, script: script, test_pid: self()}}
+        )
+
+        assert_receive :connect_attempt, 1_000
+        assert_receive %SourceSnapshotUpdated{source_snapshot: source_snapshot}, 1_000
+        assert source_snapshot.status == :unknown
+      end)
+
+    assert log =~ "streaming source #{device.id}/ha_web_socket entered unknown"
+    assert log =~ "backoff=1000ms"
+    assert log =~ "reason=:offline"
   end
 
   defp test_device do

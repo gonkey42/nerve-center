@@ -61,6 +61,7 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
         metrics: Map.get(source_snapshot, :metrics, %{}),
         data: Map.get(source_snapshot, :data, %{})
       },
+      last_status: Map.get(source_snapshot, :status, :unknown),
       conn: nil,
       websocket: nil,
       request_ref: nil,
@@ -312,11 +313,14 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
     backoff_ms = next_backoff_ms(state, reason)
     observed_at = DateTime.utc_now()
     last_payload_data = Map.put(state.last_payload.data, :connected?, false)
+    status = failure_status(state, reason)
+
+    maybe_log_failure(state, status, reason, backoff_ms)
 
     source_snapshot = %SourceSnapshot{
       device_id: state.device.id,
       source: state.source.name,
-      status: failure_status(state, reason),
+      status: status,
       observed_at: observed_at,
       last_ok_at: state.last_ok_at,
       last_error_at: observed_at,
@@ -347,6 +351,7 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
         last_error_at: observed_at,
         last_error: inspect(reason),
         last_payload: %{state.last_payload | data: last_payload_data},
+        last_status: status,
         last_frame_at: nil
     }
   end
@@ -498,6 +503,7 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
     }
 
     AppHealth.record_source_success(state.device.id, state.source.name, observed_at)
+    maybe_log_recovery(state)
     publish_source_snapshot(state, source_snapshot, observed_at)
 
     %{
@@ -508,7 +514,8 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
         last_error_at: nil,
         ever_ok?: true,
         last_error: nil,
-        last_payload: %{metrics: metric_map, data: data}
+        last_payload: %{metrics: metric_map, data: data},
+        last_status: :ok
     }
   end
 
@@ -563,6 +570,28 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
 
       {:error, {:callback_crash, label, {kind, reason}}}
   end
+
+  defp maybe_log_failure(state, status, reason, backoff_ms) do
+    if state.consecutive_failures == 0 or state.last_status != status do
+      Logger.warning(
+        "streaming source #{state.device.id}/#{state.source.name} entered #{status} " <>
+          "backoff=#{backoff_ms}ms last_ok_at=#{format_datetime(state.last_ok_at)} " <>
+          "reason=#{inspect(reason)}"
+      )
+    end
+  end
+
+  defp maybe_log_recovery(state) do
+    if state.consecutive_failures > 0 or state.last_status != :ok do
+      Logger.info(
+        "streaming source #{state.device.id}/#{state.source.name} recovered after " <>
+          "#{state.consecutive_failures} failures last_error=#{state.last_error || "none"}"
+      )
+    end
+  end
+
+  defp format_datetime(nil), do: "never"
+  defp format_datetime(%DateTime{} = datetime), do: DateTime.to_iso8601(datetime)
 
   defp next_backoff_ms(state, reason) do
     if auth_error?(reason) do

@@ -1,6 +1,8 @@
 defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias NerveCenter.Messages.DeviceSnapshotUpdated
   alias NerveCenter.Messages.SourceSnapshotUpdated
   alias NerveCenter.Runtime.AppHealth
@@ -9,6 +11,8 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
   alias NerveCenter.Runtime.SnapshotStore
   alias NerveCenter.Snapshot.DeviceSnapshot
   alias NerveCenter.Topology
+
+  require Logger
 
   defmodule FakeOfflineAwareSource do
     use NerveCenter.Runtime.PollingSource
@@ -190,16 +194,60 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
     assert Process.alive?(runner)
   end
 
-  defp test_device do
-    id = :"phase3_test_laptop_#{System.unique_integer([:positive])}"
+  test "logs actionable failure and recovery messages" do
+    device = test_device(%{offline_expected: false})
+    source_name = :glances
+    previous_level = Application.get_env(:logger, :level, :warning)
 
-    %{
-      id: id,
-      label: "Zoidberg",
-      hostname: "zoidberg",
-      ip: "100.126.22.36",
-      offline_expected: true
-    }
+    seed_app_health(device.id, source_name)
+    seed_snapshot(device)
+    start_supervised!({DeviceHub, device: device})
+
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.source_topic(device.id, source_name))
+
+    responses =
+      start_supervised!({Agent, fn -> [{:error, {:request, "timeout"}}, {:ok, %{cpu: 0.31}}] end})
+
+    log =
+      capture_log([level: :info], fn ->
+        runner =
+          start_supervised!(
+            {PollingSourceRunner,
+             module: FakeOfflineAwareSource,
+             device: device,
+             source: %{name: source_name, interval_ms: 60_000, test_pid: responses}}
+          )
+
+        assert_receive %SourceSnapshotUpdated{source_snapshot: failed_snapshot}, 1_000
+        assert failed_snapshot.status == :unknown
+
+        send(runner, :poll)
+
+        assert_receive %SourceSnapshotUpdated{source_snapshot: recovered_snapshot}, 1_000
+        assert recovered_snapshot.status == :ok
+      end)
+
+    assert log =~ "polling source #{device.id}/#{source_name} entered unknown"
+    assert log =~ "reason={:request, \"timeout\"}"
+    assert log =~ "recovered after 1 failures"
+  end
+
+  defp test_device(overrides \\ %{}) do
+    id = Map.get(overrides, :id, :"phase3_test_laptop_#{System.unique_integer([:positive])}")
+
+    Map.merge(
+      %{
+        id: id,
+        label: "Zoidberg",
+        hostname: "zoidberg",
+        ip: "100.126.22.36",
+        offline_expected: true
+      },
+      overrides
+    )
   end
 
   defp seed_snapshot(device) do
