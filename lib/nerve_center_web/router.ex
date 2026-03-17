@@ -24,6 +24,10 @@ defmodule NerveCenterWeb.Router do
   end
 
   scope "/", NerveCenterWeb do
+    get "/media/frigate/:camera/latest.jpg", MediaController, :show_frigate_latest
+  end
+
+  scope "/", NerveCenterWeb do
     pipe_through :api
 
     get "/healthz", HealthController, :show

@@ -32,6 +32,43 @@ defmodule NerveCenter.Sources.Support do
     end
   end
 
+  def request_binary(url, opts \\ []) do
+    headers = Keyword.get(opts, :headers, [])
+    method = Keyword.get(opts, :method, :get)
+
+    case Req.request(
+           method: method,
+           url: url,
+           headers: headers,
+           receive_timeout: 5_000,
+           connect_options: [timeout: 5_000],
+           retry: false
+         ) do
+      {:ok, %Req.Response{status: status, body: body} = response} when status in 200..299 ->
+        {:ok,
+         %{
+           body: body,
+           content_type:
+             response
+             |> Req.Response.get_header("content-type")
+             |> List.first()
+             |> case do
+               nil -> "application/octet-stream"
+               value -> value
+             end
+         }}
+
+      {:ok, %Req.Response{status: status, body: body}} when status in [401, 403] ->
+        {:error, {:auth, status, body}}
+
+      {:ok, %Req.Response{status: status, body: body}} ->
+        {:error, {:http, status, body}}
+
+      {:error, exception} ->
+        {:error, {:request, Exception.message(exception)}}
+    end
+  end
+
   defp maybe_put_json(opts, :unset), do: opts
   defp maybe_put_json(opts, json), do: Keyword.put(opts, :json, json)
 

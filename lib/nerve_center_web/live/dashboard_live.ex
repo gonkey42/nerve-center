@@ -45,7 +45,7 @@ defmodule NerveCenterWeb.DashboardLive do
               HAL9000 Read-Only Dashboard
             </h1>
             <p class="max-w-2xl text-sm text-stone-300">
-              Live state for the Phase 1a and Phase 1b devices, sourced locally from HAL9000 and remotely from KITT.
+              Live state for the enabled Phase 1 and Phase 2 devices, sourced locally and across the tailnet without any write actions.
             </p>
           </div>
           <nav class="flex gap-3 text-sm">
@@ -120,37 +120,45 @@ defmodule NerveCenterWeb.DashboardLive do
               </div>
             <% else %>
               <div class="grid gap-3 sm:grid-cols-2">
-                <.metric label="CPU" value={Display.percent(snapshot.metrics[:cpu_util_ratio])} />
-                <.metric
-                  label="Memory"
-                  value={
-                    memory_display(
-                      snapshot.metrics[:memory_used_bytes],
-                      snapshot.metrics[:memory_total_bytes]
-                    )
-                  }
-                />
-                <.metric
-                  label="Disk"
-                  value={
-                    memory_display(
-                      snapshot.metrics[:disk_used_bytes],
-                      snapshot.metrics[:disk_total_bytes]
-                    )
-                  }
-                />
-                <.metric
-                  label="Network"
-                  value={
-                    "#{Display.throughput(snapshot.metrics[:network_rx_bytes_per_sec])} / #{Display.throughput(snapshot.metrics[:network_tx_bytes_per_sec])}"
-                  }
-                />
-                <.metric label="Uptime" value={Display.duration(snapshot.metrics[:uptime_seconds])} />
-                <.metric
-                  :if={not is_nil(snapshot.metrics[:plex_active_streams_count])}
-                  label="Plex"
-                  value={to_string(snapshot.metrics[:plex_active_streams_count]) <> " active"}
-                />
+                <%= if system_card?(device.id) do %>
+                  <.metric label="CPU" value={Display.percent(snapshot.metrics[:cpu_util_ratio])} />
+                  <.metric
+                    label="Memory"
+                    value={
+                      memory_display(
+                        snapshot.metrics[:memory_used_bytes],
+                        snapshot.metrics[:memory_total_bytes]
+                      )
+                    }
+                  />
+                  <.metric
+                    label="Disk"
+                    value={
+                      memory_display(
+                        snapshot.metrics[:disk_used_bytes],
+                        snapshot.metrics[:disk_total_bytes]
+                      )
+                    }
+                  />
+                  <.metric
+                    label="Network"
+                    value={
+                      "#{Display.throughput(snapshot.metrics[:network_rx_bytes_per_sec])} / #{Display.throughput(snapshot.metrics[:network_tx_bytes_per_sec])}"
+                    }
+                  />
+                  <.metric
+                    label="Uptime"
+                    value={Display.duration(snapshot.metrics[:uptime_seconds])}
+                  />
+                  <.metric
+                    :if={not is_nil(snapshot.metrics[:plex_active_streams_count])}
+                    label="Plex"
+                    value={to_string(snapshot.metrics[:plex_active_streams_count]) <> " active"}
+                  />
+                <% else %>
+                  <.metric label="Status Feed" value={status_feed_label(snapshot)} />
+                  <.metric label="Entities" value={to_string(length(ha_entities(snapshot)))} />
+                <% end %>
               </div>
             <% end %>
 
@@ -174,6 +182,100 @@ defmodule NerveCenterWeb.DashboardLive do
                 label="Blocked Ratio"
                 value={Display.percent(snapshot.metrics[:pihole_blocked_ratio])}
               />
+            </div>
+
+            <div
+              :if={device.id == :rosie and not is_nil(snapshot.metrics[:frigate_process_fps])}
+              class="grid gap-3 sm:grid-cols-2"
+            >
+              <.metric
+                label="Frigate Detect"
+                value={Display.count(snapshot.metrics[:frigate_detection_fps]) <> " fps"}
+              />
+              <.metric
+                label="Frigate Process"
+                value={Display.count(snapshot.metrics[:frigate_process_fps]) <> " fps"}
+              />
+            </div>
+
+            <div
+              :if={device.id == :rosie and not is_nil(snapshot.metrics[:immich_assets_count])}
+              class="grid gap-3 sm:grid-cols-2"
+            >
+              <.metric
+                label="Immich Assets"
+                value={Display.count(snapshot.metrics[:immich_assets_count])}
+              />
+              <.metric
+                label="Immich Photos"
+                value={Display.count(snapshot.metrics[:immich_images_count])}
+              />
+              <.metric
+                label="Immich Videos"
+                value={Display.count(snapshot.metrics[:immich_videos_count])}
+              />
+              <.metric
+                label="Immich Storage"
+                value={Display.bytes(snapshot.metrics[:immich_storage_used_bytes])}
+              />
+            </div>
+
+            <div
+              :if={device.id == :rosie and preview_entries(snapshot) != []}
+              class="rounded-2xl border border-stone-800 bg-stone-950/70 p-4"
+            >
+              <div class="flex items-center justify-between">
+                <h3 class="text-sm font-semibold uppercase tracking-[0.22em] text-stone-400">
+                  Frigate Preview
+                </h3>
+                <.utc_time
+                  value={preview_entries(snapshot) |> List.first() |> Map.get(:fetched_at)}
+                  class="text-xs text-stone-500"
+                />
+              </div>
+              <div class="mt-3 grid gap-4">
+                <figure :for={entry <- preview_entries(snapshot)} class="space-y-2">
+                  <img
+                    src={preview_url(entry)}
+                    alt={"Frigate preview for #{entry.camera_name}"}
+                    class="h-48 w-full rounded-2xl border border-stone-800 object-cover"
+                  />
+                  <figcaption class="flex items-center justify-between text-xs text-stone-400">
+                    <span>{entry.camera_name}</span>
+                    <span>{Display.bytes(entry.size_bytes)}</span>
+                  </figcaption>
+                </figure>
+              </div>
+            </div>
+
+            <div
+              :if={device.id == :daisy}
+              class="rounded-2xl border border-stone-800 bg-stone-950/70 p-4"
+            >
+              <div class="flex items-center justify-between">
+                <h3 class="text-sm font-semibold uppercase tracking-[0.22em] text-stone-400">
+                  Home Assistant
+                </h3>
+                <span class="text-xs text-stone-500">{status_feed_label(snapshot)}</span>
+              </div>
+              <div class="mt-3 space-y-2">
+                <div
+                  :for={entity <- ha_entities(snapshot)}
+                  class="flex items-center justify-between gap-4 rounded-2xl border border-stone-800 bg-stone-900/70 px-3 py-2"
+                >
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-medium text-stone-100">{entity.friendly_name}</p>
+                    <p class="truncate text-xs text-stone-500">{entity.entity_id}</p>
+                  </div>
+                  <div class="text-right">
+                    <p class="text-sm text-stone-100">{entity_state(entity)}</p>
+                    <.utc_time value={entity.last_updated} class="text-xs text-stone-500" />
+                  </div>
+                </div>
+                <p :if={ha_entities(snapshot) == []} class="text-sm text-stone-400">
+                  Awaiting current Home Assistant state.
+                </p>
+              </div>
             </div>
 
             <div class="rounded-2xl border border-stone-800 bg-stone-950/70 p-4">
@@ -248,4 +350,27 @@ defmodule NerveCenterWeb.DashboardLive do
   defp memory_display(nil, _total), do: "-"
   defp memory_display(_used, nil), do: "-"
   defp memory_display(used, total), do: "#{Display.bytes(used)} / #{Display.bytes(total)}"
+
+  defp preview_entries(snapshot) do
+    get_in(snapshot.sources, [:frigate_preview, Access.key(:data), :entries]) || []
+  end
+
+  defp preview_url(entry), do: "#{entry.cache_path}?etag=#{entry.etag}"
+
+  defp ha_entities(snapshot) do
+    get_in(snapshot.sources, [:ha_web_socket, Access.key(:data), :entities]) || []
+  end
+
+  defp entity_state(%{state: state, unit_of_measurement: nil}), do: state
+  defp entity_state(%{state: state, unit_of_measurement: unit}), do: "#{state} #{unit}"
+
+  defp system_card?(device_id), do: device_id in [:hal9000, :kitt, :rosie, :ubuntu_laptop]
+
+  defp status_feed_label(snapshot) do
+    case get_in(snapshot.sources, [:ha_web_socket, Access.key(:data), :connected?]) do
+      false -> "disconnected"
+      true -> "streaming"
+      _ -> Atom.to_string(snapshot.status)
+    end
+  end
 end

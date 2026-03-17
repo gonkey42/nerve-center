@@ -105,6 +105,60 @@ defmodule NerveCenterWeb.DeviceLive do
         </div>
       </section>
 
+      <section
+        :if={preview_entries(@snapshot) != []}
+        class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80"
+      >
+        <div class="border-b border-stone-800 px-6 py-4">
+          <h2 class="text-lg font-semibold text-stone-50">Frigate Preview</h2>
+        </div>
+        <div class="grid gap-4 px-6 py-5 md:grid-cols-2">
+          <figure :for={entry <- preview_entries(@snapshot)} class="space-y-3">
+            <img
+              src={preview_url(entry)}
+              alt={"Frigate preview for #{entry.camera_name}"}
+              class="h-64 w-full rounded-2xl border border-stone-800 object-cover"
+            />
+            <figcaption class="flex items-center justify-between text-sm text-stone-300">
+              <span>{entry.camera_name}</span>
+              <span>{Display.bytes(entry.size_bytes)}</span>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section
+        :if={ha_entities(@snapshot) != []}
+        class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80"
+      >
+        <div class="border-b border-stone-800 px-6 py-4">
+          <h2 class="text-lg font-semibold text-stone-50">Home Assistant Entities</h2>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-stone-800 text-sm">
+            <thead class="bg-stone-950/70 text-left text-xs uppercase tracking-[0.24em] text-stone-400">
+              <tr>
+                <th class="px-6 py-3">Entity</th>
+                <th class="px-6 py-3">State</th>
+                <th class="px-6 py-3">Last Updated</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-stone-800 text-stone-200">
+              <tr :for={entity <- ha_entities(@snapshot)}>
+                <td class="px-6 py-4">
+                  <p class="font-medium text-stone-100">{entity.friendly_name}</p>
+                  <p class="text-xs text-stone-500">{entity.entity_id}</p>
+                </td>
+                <td class="px-6 py-4">{entity_state(entity)}</td>
+                <td class="px-6 py-4">
+                  <.utc_time value={entity.last_updated} class="text-stone-300" />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="grid gap-6 xl:grid-cols-2">
         <article
           :for={source <- enabled_sources(@device)}
@@ -207,6 +261,19 @@ defmodule NerveCenterWeb.DeviceLive do
   defp source_path(device_id, source_name) do
     "/sources/#{device_id}/#{source_name}"
   end
+
+  defp preview_entries(snapshot) do
+    get_in(snapshot.sources, [:frigate_preview, Access.key(:data), :entries]) || []
+  end
+
+  defp preview_url(entry), do: "#{entry.cache_path}?etag=#{entry.etag}"
+
+  defp ha_entities(snapshot) do
+    get_in(snapshot.sources, [:ha_web_socket, Access.key(:data), :entities]) || []
+  end
+
+  defp entity_state(%{state: state, unit_of_measurement: nil}), do: state
+  defp entity_state(%{state: state, unit_of_measurement: unit}), do: "#{state} #{unit}"
 
   defp humanize_metric(metric_id) do
     metric_id

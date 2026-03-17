@@ -17,10 +17,31 @@ defmodule NerveCenterWeb.DetailLiveTest do
     assert html =~ "Current Metrics"
   end
 
+  test "device detail renders for rosie", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/devices/rosie")
+
+    assert html =~ "ROSIE"
+    assert html =~ "Current Metrics"
+  end
+
+  test "device detail renders for daisy", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/devices/daisy")
+
+    assert html =~ "DAISY"
+    assert html =~ "Current Metrics"
+  end
+
   test "source detail renders for the kitt pihole source", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/sources/kitt/pihole")
 
     assert html =~ "KITT / pihole"
+    assert html =~ "Health State"
+  end
+
+  test "source detail renders for the daisy websocket source", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_web_socket")
+
+    assert html =~ "DAISY / ha_web_socket"
     assert html =~ "Health State"
   end
 end

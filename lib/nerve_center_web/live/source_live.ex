@@ -117,6 +117,60 @@ defmodule NerveCenterWeb.SourceLive do
         </article>
       </section>
 
+      <section
+        :if={preview_entries(@source_snapshot) != []}
+        class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80"
+      >
+        <div class="border-b border-stone-800 px-6 py-4">
+          <h2 class="text-lg font-semibold text-stone-50">Cached Preview</h2>
+        </div>
+        <div class="grid gap-4 px-6 py-5 md:grid-cols-2">
+          <figure :for={entry <- preview_entries(@source_snapshot)} class="space-y-3">
+            <img
+              src={preview_url(entry)}
+              alt={"Frigate preview for #{entry.camera_name}"}
+              class="h-64 w-full rounded-2xl border border-stone-800 object-cover"
+            />
+            <figcaption class="flex items-center justify-between text-sm text-stone-300">
+              <span>{entry.camera_name}</span>
+              <span>{Display.bytes(entry.size_bytes)}</span>
+            </figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section
+        :if={ha_entities(@source_snapshot) != []}
+        class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80"
+      >
+        <div class="border-b border-stone-800 px-6 py-4">
+          <h2 class="text-lg font-semibold text-stone-50">Current Entities</h2>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-stone-800 text-sm">
+            <thead class="bg-stone-950/70 text-left text-xs uppercase tracking-[0.24em] text-stone-400">
+              <tr>
+                <th class="px-6 py-3">Entity</th>
+                <th class="px-6 py-3">State</th>
+                <th class="px-6 py-3">Last Updated</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-stone-800 text-stone-200">
+              <tr :for={entity <- ha_entities(@source_snapshot)}>
+                <td class="px-6 py-4">
+                  <p class="font-medium text-stone-100">{entity.friendly_name}</p>
+                  <p class="text-xs text-stone-500">{entity.entity_id}</p>
+                </td>
+                <td class="px-6 py-4">{entity_state(entity)}</td>
+                <td class="px-6 py-4">
+                  <.utc_time value={entity.last_updated} class="text-stone-300" />
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80">
         <div class="border-b border-stone-800 px-6 py-4">
           <h2 class="text-lg font-semibold text-stone-50">Metrics</h2>
@@ -203,6 +257,20 @@ defmodule NerveCenterWeb.SourceLive do
     |> Enum.sort_by(fn {metric_id, _value} -> metric_label(metric_id) end)
   end
 
+  defp preview_entries(nil), do: []
+
+  defp preview_entries(source_snapshot) do
+    get_in(source_snapshot.data, [:entries]) || []
+  end
+
+  defp preview_url(entry), do: "#{entry.cache_path}?etag=#{entry.etag}"
+
+  defp ha_entities(nil), do: []
+
+  defp ha_entities(source_snapshot) do
+    get_in(source_snapshot.data, [:entities]) || []
+  end
+
   defp metric_label(metric_id) do
     case Catalog.definition(metric_id) do
       %{id: id} ->
@@ -220,6 +288,9 @@ defmodule NerveCenterWeb.SourceLive do
     |> String.split(" ", trim: true)
     |> Enum.map_join(" ", &String.capitalize/1)
   end
+
+  defp entity_state(%{state: state, unit_of_measurement: nil}), do: state
+  defp entity_state(%{state: state, unit_of_measurement: unit}), do: "#{state} #{unit}"
 
   defp pretty(data), do: inspect(data, pretty: true, limit: :infinity)
 end

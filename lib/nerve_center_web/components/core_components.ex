@@ -460,7 +460,7 @@ defmodule NerveCenterWeb.CoreComponents do
     assigns =
       assigns
       |> assign(:utc, utc)
-      |> assign_new(:id, fn -> "utc-time-#{System.unique_integer([:positive])}" end)
+      |> assign(:id, assigns.id || "utc-time-#{System.unique_integer([:positive])}")
 
     ~H"""
     <time :if={@utc} id={@id} phx-hook="LocalTime" data-utc={@utc} class={@class}></time>

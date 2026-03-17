@@ -7,7 +7,9 @@ for {key, value} <- [
       {"PLEX_TOKEN", "test-plex-token"},
       {"PIHOLE_APP_PASSWORD", "test-pihole-password"},
       {"NUT_USERNAME", "test-nut-user"},
-      {"NUT_PASSWORD", "test-nut-password"}
+      {"NUT_PASSWORD", "test-nut-password"},
+      {"IMMICH_API_KEY", "test-immich-api-key"},
+      {"HA_TOKEN", "test-ha-token"}
     ] do
   if is_nil(System.get_env(key)) do
     System.put_env(key, value)

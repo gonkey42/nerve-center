@@ -96,7 +96,7 @@ config :nerve_center, :devices, [
     hostname: "rosie",
     ip: "100.75.76.66",
     display_order: 4,
-    enabled: false,
+    enabled: true,
     offline_expected: false,
     hub_module: NerveCenter.Devices.RosieHub,
     glances_base_url: "http://100.75.76.66:61208",
@@ -107,25 +107,25 @@ config :nerve_center, :devices, [
       %{
         name: :glances,
         module: NerveCenter.Sources.Rosie.GlancesSource,
-        enabled: false,
+        enabled: true,
         interval_ms: 30_000
       },
       %{
         name: :frigate,
         module: NerveCenter.Sources.Rosie.FrigateSource,
-        enabled: false,
+        enabled: true,
         interval_ms: 30_000
       },
       %{
         name: :frigate_preview,
         module: NerveCenter.Sources.Rosie.FrigatePreviewSource,
-        enabled: false,
+        enabled: true,
         interval_ms: 10_000
       },
       %{
         name: :immich,
         module: NerveCenter.Sources.Rosie.ImmichSource,
-        enabled: false,
+        enabled: true,
         interval_ms: 60_000
       }
     ]
@@ -136,22 +136,29 @@ config :nerve_center, :devices, [
     hostname: "daisy",
     ip: "100.103.249.3",
     display_order: 5,
-    enabled: false,
+    enabled: true,
     offline_expected: false,
     hub_module: NerveCenter.Devices.DaisyHub,
     home_assistant_base_url: "http://100.103.249.3:8123",
-    curated_entity_ids: [],
+    curated_entity_ids: [
+      "weather.home",
+      "sensor.home_relative_humidity",
+      "sensor.bathroom_esp32_bathroom_temperature",
+      "sensor.tp359s_a71c_temperature",
+      "sensor.tp359s_a71c_humidity",
+      "binary_sensor.livingroom_motion"
+    ],
     sources: [
       %{
         name: :ha_web_socket,
         module: NerveCenter.Sources.Daisy.HAWebSocketSource,
-        enabled: false,
+        enabled: true,
         interval_ms: 90_000
       },
       %{
         name: :ha_rest_probe,
         module: NerveCenter.Sources.Daisy.HARestProbe,
-        enabled: false,
+        enabled: true,
         interval_ms: 300_000
       }
     ]

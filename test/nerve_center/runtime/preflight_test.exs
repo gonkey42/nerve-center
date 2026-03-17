@@ -14,8 +14,8 @@ defmodule NerveCenter.Runtime.PreflightTest do
     assert "PIHOLE_APP_PASSWORD" in required_env
     assert "NUT_USERNAME" in required_env
     assert "NUT_PASSWORD" in required_env
-    refute "IMMICH_API_KEY" in required_env
-    refute "HA_TOKEN" in required_env
+    assert "IMMICH_API_KEY" in required_env
+    assert "HA_TOKEN" in required_env
     refute "UNIFI_API_KEY" in required_env
   end
 end

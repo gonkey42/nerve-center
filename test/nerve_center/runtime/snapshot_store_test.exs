@@ -4,9 +4,9 @@ defmodule NerveCenter.Runtime.SnapshotStoreTest do
   alias NerveCenter.Runtime.SnapshotStore
 
   test "seeds unknown snapshot for configured device" do
-    snapshot = SnapshotStore.snapshot(:rosie)
+    snapshot = SnapshotStore.snapshot(:stig)
 
-    assert snapshot.device_id == :rosie
+    assert snapshot.device_id == :stig
     assert snapshot.status == :unknown
     assert snapshot.metrics == %{}
     assert snapshot.sources == %{}

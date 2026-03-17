@@ -60,7 +60,8 @@ defmodule NerveCenter.MixProject do
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.4"},
       {:bandit, "~> 1.10.3"},
-      {:req, "~> 0.5.17"}
+      {:req, "~> 0.5.17"},
+      {:mint_web_socket, "~> 1.0.5"}
     ]
   end
 
