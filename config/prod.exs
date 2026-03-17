@@ -23,17 +23,12 @@ config :nerve_center, NerveCenterWeb.Endpoint,
 # Do not print debug messages in production
 config :logger, level: :info
 
-config :kernel,
-  logger: [
-    {:handler, :default, :logger_std_h,
-     %{
-       config: %{
-         file: ~c"/Users/hal9000/claudebot/logs/nerve-center/app.log",
-         max_no_bytes: 10_485_760,
-         max_no_files: 5,
-         filesync_repeat_interval: 5_000
-       }
-     }}
+config :logger, :default_handler,
+  config: [
+    file: ~c"/Users/hal9000/claudebot/logs/nerve-center/app.log",
+    max_no_bytes: 10_485_760,
+    max_no_files: 5,
+    filesync_repeat_interval: 5_000
   ]
 
 # Runtime production configuration, including reading
