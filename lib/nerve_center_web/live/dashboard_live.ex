@@ -45,7 +45,7 @@ defmodule NerveCenterWeb.DashboardLive do
               HAL9000 Read-Only Dashboard
             </h1>
             <p class="max-w-2xl text-sm text-stone-300">
-              Live state for the enabled Phase 1 and Phase 2 devices, sourced locally and across the tailnet without any write actions.
+              Live state for the enabled devices, sourced locally, across the tailnet, and from the LAN gateway without any write actions.
             </p>
           </div>
           <nav class="flex gap-3 text-sm">
@@ -119,47 +119,68 @@ defmodule NerveCenterWeb.DashboardLive do
                 />
               </div>
             <% else %>
-              <div class="grid gap-3 sm:grid-cols-2">
-                <%= if system_card?(device.id) do %>
-                  <.metric label="CPU" value={Display.percent(snapshot.metrics[:cpu_util_ratio])} />
+              <%= if device.id == :stig do %>
+                <div class="grid gap-3 sm:grid-cols-2">
                   <.metric
-                    label="Memory"
-                    value={
-                      memory_display(
-                        snapshot.metrics[:memory_used_bytes],
-                        snapshot.metrics[:memory_total_bytes]
-                      )
-                    }
+                    label="WAN Status"
+                    value={Display.boolean(snapshot.metrics[:unifi_wan_up_flag])}
                   />
                   <.metric
-                    label="Disk"
-                    value={
-                      memory_display(
-                        snapshot.metrics[:disk_used_bytes],
-                        snapshot.metrics[:disk_total_bytes]
-                      )
-                    }
+                    label="Connected Clients"
+                    value={Display.count(snapshot.metrics[:unifi_clients_connected_count])}
                   />
                   <.metric
-                    label="Network"
-                    value={
-                      "#{Display.throughput(snapshot.metrics[:network_rx_bytes_per_sec])} / #{Display.throughput(snapshot.metrics[:network_tx_bytes_per_sec])}"
-                    }
+                    label="Gateway CPU"
+                    value={Display.percent(snapshot.metrics[:unifi_gateway_cpu_ratio])}
                   />
                   <.metric
-                    label="Uptime"
-                    value={Display.duration(snapshot.metrics[:uptime_seconds])}
+                    label="Gateway Memory"
+                    value={Display.percent(snapshot.metrics[:unifi_gateway_memory_ratio])}
                   />
-                  <.metric
-                    :if={not is_nil(snapshot.metrics[:plex_active_streams_count])}
-                    label="Plex"
-                    value={to_string(snapshot.metrics[:plex_active_streams_count]) <> " active"}
-                  />
-                <% else %>
-                  <.metric label="Status Feed" value={status_feed_label(snapshot)} />
-                  <.metric label="Entities" value={to_string(length(ha_entities(snapshot)))} />
-                <% end %>
-              </div>
+                </div>
+              <% else %>
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <%= if system_card?(device.id) do %>
+                    <.metric label="CPU" value={Display.percent(snapshot.metrics[:cpu_util_ratio])} />
+                    <.metric
+                      label="Memory"
+                      value={
+                        memory_display(
+                          snapshot.metrics[:memory_used_bytes],
+                          snapshot.metrics[:memory_total_bytes]
+                        )
+                      }
+                    />
+                    <.metric
+                      label="Disk"
+                      value={
+                        memory_display(
+                          snapshot.metrics[:disk_used_bytes],
+                          snapshot.metrics[:disk_total_bytes]
+                        )
+                      }
+                    />
+                    <.metric
+                      label="Network"
+                      value={
+                        "#{Display.throughput(snapshot.metrics[:network_rx_bytes_per_sec])} / #{Display.throughput(snapshot.metrics[:network_tx_bytes_per_sec])}"
+                      }
+                    />
+                    <.metric
+                      label="Uptime"
+                      value={Display.duration(snapshot.metrics[:uptime_seconds])}
+                    />
+                    <.metric
+                      :if={not is_nil(snapshot.metrics[:plex_active_streams_count])}
+                      label="Plex"
+                      value={to_string(snapshot.metrics[:plex_active_streams_count]) <> " active"}
+                    />
+                  <% else %>
+                    <.metric label="Status Feed" value={status_feed_label(snapshot)} />
+                    <.metric label="Entities" value={to_string(length(ha_entities(snapshot)))} />
+                  <% end %>
+                </div>
+              <% end %>
             <% end %>
 
             <div

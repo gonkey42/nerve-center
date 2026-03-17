@@ -5,14 +5,16 @@ defmodule NerveCenter.Sources.Support do
     headers = Keyword.get(opts, :headers, [])
     method = Keyword.get(opts, :method, :get)
     json = Keyword.get(opts, :json, :unset)
+    receive_timeout = Keyword.get(opts, :receive_timeout, 5_000)
+    connect_options = Keyword.merge([timeout: 5_000], Keyword.get(opts, :connect_options, []))
 
     request_opts =
       [
         method: method,
         url: url,
         headers: headers ++ [{"accept", "application/json"}],
-        receive_timeout: 5_000,
-        connect_options: [timeout: 5_000],
+        receive_timeout: receive_timeout,
+        connect_options: connect_options,
         retry: false
       ]
       |> maybe_put_json(json)
@@ -35,13 +37,15 @@ defmodule NerveCenter.Sources.Support do
   def request_binary(url, opts \\ []) do
     headers = Keyword.get(opts, :headers, [])
     method = Keyword.get(opts, :method, :get)
+    receive_timeout = Keyword.get(opts, :receive_timeout, 5_000)
+    connect_options = Keyword.merge([timeout: 5_000], Keyword.get(opts, :connect_options, []))
 
     case Req.request(
            method: method,
            url: url,
            headers: headers,
-           receive_timeout: 5_000,
-           connect_options: [timeout: 5_000],
+           receive_timeout: receive_timeout,
+           connect_options: connect_options,
            retry: false
          ) do
       {:ok, %Req.Response{status: status, body: body} = response} when status in 200..299 ->

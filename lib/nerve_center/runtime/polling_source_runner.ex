@@ -172,7 +172,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     source_snapshot = %SourceSnapshot{
       device_id: state.device.id,
       source: state.source.name,
-      status: failure_status(state),
+      status: failure_status(state, reason),
       observed_at: observed_at,
       last_ok_at: state.last_ok_at,
       last_error_at: observed_at,
@@ -224,10 +224,15 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
   end
 
   defp next_backoff_ms(state, reason) do
-    if auth_error?(reason) do
-      next_auth_backoff_ms(state)
-    else
-      next_standard_backoff_ms(state)
+    cond do
+      offline_reason?(state, reason) ->
+        300_000
+
+      auth_error?(reason) ->
+        next_auth_backoff_ms(state)
+
+      true ->
+        next_standard_backoff_ms(state)
     end
   end
 
@@ -260,8 +265,11 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     max(base + :rand.uniform(jitter * 2 + 1) - jitter - 1, 1_000)
   end
 
-  defp failure_status(state) do
+  defp failure_status(state, reason) do
     cond do
+      offline_reason?(state, reason) and state.ever_ok? ->
+        :offline
+
       not state.ever_ok? ->
         :unknown
 
@@ -272,6 +280,13 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
         :error
     end
   end
+
+  defp offline_reason?(state, reason) do
+    state.device.offline_expected and request_error?(reason)
+  end
+
+  defp request_error?({:request, _reason}), do: true
+  defp request_error?(_reason), do: false
 
   defp stale?(state) do
     case state.last_ok_at do

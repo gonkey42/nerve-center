@@ -169,7 +169,7 @@ config :nerve_center, :devices, [
     hostname: "stig",
     ip: "192.168.0.1",
     display_order: 6,
-    enabled: false,
+    enabled: true,
     offline_expected: false,
     hub_module: NerveCenter.Devices.StigHub,
     unifi_base_url: "https://192.168.0.1",
@@ -178,18 +178,18 @@ config :nerve_center, :devices, [
       %{
         name: :unifi,
         module: NerveCenter.Sources.Stig.UniFiSource,
-        enabled: false,
+        enabled: true,
         interval_ms: 60_000
       }
     ]
   },
   %{
     id: :ubuntu_laptop,
-    label: "Ubuntu Laptop",
+    label: "Zoidberg",
     hostname: "zoidberg",
     ip: "100.126.22.36",
     display_order: 7,
-    enabled: false,
+    enabled: true,
     offline_expected: true,
     hub_module: NerveCenter.Devices.UbuntuLaptopHub,
     glances_base_url: "http://100.126.22.36:61208",
@@ -197,8 +197,8 @@ config :nerve_center, :devices, [
       %{
         name: :glances,
         module: NerveCenter.Sources.UbuntuLaptop.GlancesSource,
-        enabled: false,
-        interval_ms: 30_000
+        enabled: true,
+        interval_ms: 60_000
       }
     ]
   }

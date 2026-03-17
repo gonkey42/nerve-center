@@ -29,7 +29,7 @@ defmodule NerveCenterWeb.SourcesLive do
           <div>
             <h1 class="text-4xl font-semibold tracking-tight text-stone-50">App Health</h1>
             <p class="max-w-2xl text-sm text-stone-300">
-              Migration, persistence, and per-source failure state for the enabled sources across Phases 1 and 2.
+              Migration, persistence, and per-source failure state for the enabled sources across the deployed devices.
             </p>
           </div>
           <nav class="flex gap-3 text-sm">

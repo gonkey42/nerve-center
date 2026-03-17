@@ -28,6 +28,10 @@ defmodule NerveCenterWeb.Router do
   end
 
   scope "/", NerveCenterWeb do
+    get "/metrics", MetricsController, :show
+  end
+
+  scope "/", NerveCenterWeb do
     pipe_through :api
 
     get "/healthz", HealthController, :show

@@ -31,6 +31,20 @@ defmodule NerveCenterWeb.DetailLiveTest do
     assert html =~ "Current Metrics"
   end
 
+  test "device detail renders for stig", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/devices/stig")
+
+    assert html =~ "Stig"
+    assert html =~ "Current Metrics"
+  end
+
+  test "device detail renders for zoidberg", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/devices/ubuntu_laptop")
+
+    assert html =~ "Zoidberg"
+    assert html =~ "Current Metrics"
+  end
+
   test "source detail renders for the kitt pihole source", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/sources/kitt/pihole")
 
@@ -42,6 +56,13 @@ defmodule NerveCenterWeb.DetailLiveTest do
     {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_web_socket")
 
     assert html =~ "DAISY / ha_web_socket"
+    assert html =~ "Health State"
+  end
+
+  test "source detail renders for the stig unifi source", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/sources/stig/unifi")
+
+    assert html =~ "Stig / unifi"
     assert html =~ "Health State"
   end
 end

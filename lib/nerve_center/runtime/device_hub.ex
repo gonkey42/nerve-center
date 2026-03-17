@@ -66,7 +66,7 @@ defmodule NerveCenter.Runtime.DeviceHub do
       Enum.all?(source_states, &(&1.status == :ok)) ->
         :ok
 
-      Enum.all?(source_states, &(&1.status == :error)) ->
+      Enum.all?(source_states, &(&1.status in [:error, :offline])) ->
         :offline
 
       true ->
