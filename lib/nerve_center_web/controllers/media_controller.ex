@@ -23,7 +23,9 @@ defmodule NerveCenterWeb.MediaController do
         end
 
       :error ->
-        send_resp(conn, :not_found, "preview not cached")
+        conn
+        |> put_resp_content_type("text/plain")
+        |> send_resp(:not_found, "preview not cached")
     end
   end
 

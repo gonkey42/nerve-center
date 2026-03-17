@@ -237,6 +237,10 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
     end)
   end
 
+  defp process_frame(state, {:error, reason}) do
+    {:disconnect, state, reason}
+  end
+
   defp process_frame(state, {:text, payload}) do
     state = %{state | last_frame_at: DateTime.utc_now()}
 
@@ -305,7 +309,7 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
     {state, reason} = apply_disconnect_callback(state, reason)
     safe_close(state.conn)
 
-    backoff_ms = next_backoff_ms(state.backoff_ms)
+    backoff_ms = next_backoff_ms(state, reason)
     observed_at = DateTime.utc_now()
     last_payload_data = Map.put(state.last_payload.data, :connected?, false)
 
@@ -435,9 +439,7 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
           upgrade_status: nil,
           upgrade_headers: [],
           private: Map.get(spec, :private, state.private),
-          last_frame_at: DateTime.utc_now(),
-          backoff_ms: 0,
-          last_error: nil
+          last_frame_at: DateTime.utc_now()
       }
     else
       {:error, conn, reason} ->
@@ -562,11 +564,27 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
       {:error, {:callback_crash, label, {kind, reason}}}
   end
 
-  defp next_backoff_ms(0), do: hd(@streaming_backoff_ms)
+  defp next_backoff_ms(state, reason) do
+    if auth_error?(reason) do
+      next_auth_backoff_ms(state.backoff_ms)
+    else
+      next_standard_backoff_ms(state.backoff_ms)
+    end
+  end
 
-  defp next_backoff_ms(current_backoff) do
+  defp next_standard_backoff_ms(0), do: hd(@streaming_backoff_ms)
+
+  defp next_standard_backoff_ms(current_backoff) do
     Enum.find(@streaming_backoff_ms, List.last(@streaming_backoff_ms), &(&1 > current_backoff))
   end
+
+  defp next_auth_backoff_ms(current_backoff) when current_backoff < 60_000, do: 60_000
+  defp next_auth_backoff_ms(current_backoff), do: min(current_backoff * 2, 900_000)
+
+  defp auth_error?({:auth_invalid, _message}), do: true
+  defp auth_error?({:auth, _reason}), do: true
+  defp auth_error?({:auth, _status, _body}), do: true
+  defp auth_error?(_reason), do: false
 
   defp failure_status(state, :stale_timeout) when state.ever_ok?, do: :stale
   defp failure_status(state, _reason) when not state.ever_ok?, do: :unknown

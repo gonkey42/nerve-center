@@ -37,7 +37,15 @@ defmodule NerveCenter.DataCase do
   """
   def setup_sandbox(tags) do
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(NerveCenter.Repo, shared: not tags[:async])
+    allow_global_repo_users(pid)
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+  end
+
+  defp allow_global_repo_users(owner_pid) do
+    case Process.whereis(NerveCenter.Runtime.PersistenceWriter) do
+      nil -> :ok
+      writer_pid -> Ecto.Adapters.SQL.Sandbox.allow(NerveCenter.Repo, owner_pid, writer_pid)
+    end
   end
 
   @doc """

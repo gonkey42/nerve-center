@@ -28,4 +28,12 @@ defmodule NerveCenterWeb.MediaControllerTest do
     assert conn.status == 304
     assert conn.resp_body == ""
   end
+
+  test "returns a plain-text 404 when the preview is not cached", %{conn: conn} do
+    conn = get(conn, "/media/frigate/missing/latest.jpg")
+
+    assert conn.status == 404
+    assert conn.resp_body == "preview not cached"
+    assert get_resp_header(conn, "content-type") == ["text/plain; charset=utf-8"]
+  end
 end

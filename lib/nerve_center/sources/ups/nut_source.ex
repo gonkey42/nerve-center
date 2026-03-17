@@ -176,7 +176,7 @@ defmodule NerveCenter.Sources.Ups.NUTSource do
         :ok
 
       {:ok, "ERR " <> message} ->
-        {:error, {:nut_error, message}}
+        {:error, classify_nut_error(message)}
 
       {:ok, line} ->
         {:error, {:unexpected_line, line}}
@@ -195,6 +195,11 @@ defmodule NerveCenter.Sources.Ups.NUTSource do
         {:error, {:tcp_recv, reason}}
     end
   end
+
+  defp classify_nut_error("ACCESS-DENIED" <> _rest = message), do: {:auth, message}
+  defp classify_nut_error("USERNAME-REQUIRED" <> _rest = message), do: {:auth, message}
+  defp classify_nut_error("PASSWORD-REQUIRED" <> _rest = message), do: {:auth, message}
+  defp classify_nut_error(message), do: {:nut_error, message}
 
   defp fetch_float(vars, key) do
     case Map.fetch(vars, key) do

@@ -179,7 +179,7 @@ defmodule NerveCenter.Runtime.PersistenceWriter do
         MIN(s.metric_value),
         MAX(s.metric_value),
         COUNT(*),
-        strftime('%Y-%m-%dT%H:00:00Z', s.recorded_at)
+        strftime('%Y-%m-%dT%H:00:00.000000Z', s.recorded_at)
       FROM device_samples AS s
       WHERE s.recorded_at < ?
         AND NOT EXISTS (
@@ -188,13 +188,14 @@ defmodule NerveCenter.Runtime.PersistenceWriter do
           WHERE r.device_id = s.device_id
             AND r.source = s.source
             AND r.metric_name = s.metric_name
-            AND r.bucket_start_at = strftime('%Y-%m-%dT%H:00:00Z', s.recorded_at)
+            AND strftime('%Y-%m-%dT%H:00:00.000000Z', r.bucket_start_at) =
+                  strftime('%Y-%m-%dT%H:00:00.000000Z', s.recorded_at)
         )
       GROUP BY
         s.device_id,
         s.source,
         s.metric_name,
-        strftime('%Y-%m-%dT%H:00:00Z', s.recorded_at)
+        strftime('%Y-%m-%dT%H:00:00.000000Z', s.recorded_at)
       """,
       [cutoff_iso]
     )

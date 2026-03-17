@@ -97,6 +97,37 @@ defmodule NerveCenter.Sources.Ups.NUTSourceTest do
     assert payload.data.status == "OL"
   end
 
+  test "poll classifies ACCESS-DENIED as an auth failure" do
+    {:ok, listener} =
+      :gen_tcp.listen(0, [
+        :binary,
+        active: false,
+        packet: :line,
+        reuseaddr: true,
+        ip: {127, 0, 0, 1}
+      ])
+
+    {:ok, {{127, 0, 0, 1}, port}} = :inet.sockname(listener)
+
+    server =
+      Task.async(fn ->
+        Process.put(:deny_password?, true)
+        {:ok, socket} = :gen_tcp.accept(listener)
+
+        assert recv_command(socket) == "USERNAME test-user"
+        assert recv_command(socket) == "PASSWORD test-pass"
+
+        :ok = :gen_tcp.close(socket)
+        :ok = :gen_tcp.close(listener)
+      end)
+
+    context = %{device: %{nut_host: "127.0.0.1", nut_port: port, nut_device: "cyberpower"}}
+
+    assert {:error, {:auth, "ACCESS-DENIED"}} = NUTSource.poll(context)
+
+    Task.await(server)
+  end
+
   defp recv_command(socket) do
     {:ok, line} = :gen_tcp.recv(socket, 0, 1_000)
     trimmed = String.trim(line)
@@ -107,7 +138,11 @@ defmodule NerveCenter.Sources.Ups.NUTSourceTest do
           "OK\r\n"
 
         "PASSWORD test-pass" ->
-          "OK\r\n"
+          if Process.get(:deny_password?) do
+            "ERR ACCESS-DENIED\r\n"
+          else
+            "OK\r\n"
+          end
 
         "LIST VAR cyberpower" ->
           [

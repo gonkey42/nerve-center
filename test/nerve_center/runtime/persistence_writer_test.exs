@@ -47,6 +47,36 @@ defmodule NerveCenter.Runtime.PersistenceWriterTest do
     assert Repo.aggregate(DeviceSample, :count, :id) == 250
   end
 
+  test "drains a 10,000 message probe burst without leaving backlog behind" do
+    row = %{
+      device_id: "mailbox-burst",
+      source: "polling",
+      probe_data: %{ok: true},
+      probed_at: DateTime.utc_now()
+    }
+
+    Enum.each(1..10_000, fn _ ->
+      PersistenceWriter.enqueue_probe(row)
+    end)
+
+    writer_pid = Process.whereis(PersistenceWriter)
+    assert is_pid(writer_pid)
+    assert {:message_queue_len, backlog} = Process.info(writer_pid, :message_queue_len)
+    assert backlog > 0
+
+    wait_until(
+      fn ->
+        Repo.aggregate(SourceProbe, :count, :id) == 10_000 and
+          Process.info(writer_pid, :message_queue_len) == {:message_queue_len, 0}
+      end,
+      5_000
+    )
+
+    assert Repo.aggregate(SourceProbe, :count, :id) == 10_000
+    assert Process.info(writer_pid, :message_queue_len) == {:message_queue_len, 0}
+    assert AppHealth.snapshot().persistence.queue_depth == 0
+  end
+
   test "maintenance prunes expired rows and rolls up old samples" do
     triggered_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
     old_sample_time = DateTime.add(triggered_at, -8 * 86_400, :second)
@@ -140,6 +170,50 @@ defmodule NerveCenter.Runtime.PersistenceWriterTest do
     assert rollup.min_value == 0.2
     assert rollup.max_value == 0.6
     assert_in_delta rollup.avg_value, 0.4, 0.0001
+  end
+
+  test "maintenance does not duplicate an existing hourly rollup for the same bucket" do
+    triggered_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    old_sample_time = DateTime.add(triggered_at, -8 * 86_400, :second)
+
+    Repo.insert_all(DeviceSample, [
+      %{
+        device_id: "existing-rollup",
+        source: "polling",
+        metric_name: "cpu_util_ratio",
+        metric_value: 0.5,
+        recorded_at: old_sample_time
+      }
+    ])
+
+    bucket_start_at =
+      DateTime.new!(
+        DateTime.to_date(old_sample_time),
+        Time.new!(old_sample_time.hour, 0, 0, {0, 6}),
+        "Etc/UTC"
+      )
+
+    Repo.insert!(%DeviceHourlyRollup{
+      device_id: "existing-rollup",
+      source: "polling",
+      metric_name: "cpu_util_ratio",
+      avg_value: 0.5,
+      min_value: 0.5,
+      max_value: 0.5,
+      sample_count: 1,
+      bucket_start_at: bucket_start_at
+    })
+
+    PersistenceWriter.run_maintenance(triggered_at)
+
+    wait_until(fn ->
+      Repo.aggregate(DeviceSample, :count, :id) == 0 and
+        Repo.aggregate(DeviceHourlyRollup, :count, :id) == 1 and
+        AppHealth.snapshot().retention.status == :ok
+    end)
+
+    assert Repo.aggregate(DeviceSample, :count, :id) == 0
+    assert Repo.aggregate(DeviceHourlyRollup, :count, :id) == 1
   end
 
   defp reset_runtime_state do

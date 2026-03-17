@@ -36,7 +36,10 @@ defmodule NerveCenter.Paths do
   end
 
   defp timestamp_suffix do
-    DateTime.utc_now()
-    |> Calendar.strftime("%Y%m%dT%H%M%SZ")
+    timestamp =
+      DateTime.utc_now()
+      |> Calendar.strftime("%Y%m%dT%H%M%S")
+
+    "#{timestamp}-#{System.unique_integer([:positive])}Z"
   end
 end
