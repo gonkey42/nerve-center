@@ -46,6 +46,48 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
     end
   end
 
+  defmodule CrashySource do
+    use NerveCenter.Runtime.PollingSource
+
+    @impl true
+    def required_env, do: []
+
+    @impl true
+    def normal_interval_ms, do: 60_000
+
+    @impl true
+    def stale_after_ms, do: 180_000
+
+    @impl true
+    def probe(_context), do: {:ok, %{mode: "test"}}
+
+    @impl true
+    def poll(%{source: %{test_pid: test_pid}}) do
+      next_response =
+        Agent.get_and_update(test_pid, fn
+          [next | rest] -> {next, rest}
+          [] -> {{:error, {:request, "no scripted response"}}, []}
+        end)
+
+      case next_response do
+        :raise -> raise "boom"
+        other -> other
+      end
+    end
+
+    @impl true
+    def normalize(raw, _context) do
+      cpu = raw[:cpu] || raw["cpu"] || 0.0
+
+      {:ok,
+       %{
+         observed_at: DateTime.utc_now(),
+         metrics: [%{metric: :cpu_util_ratio, value: cpu}],
+         data: %{cpu: cpu}
+       }}
+    end
+  end
+
   test "expected-offline sources remain unknown before the first successful poll" do
     device = test_device()
     source_name = :glances
@@ -112,6 +154,40 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
 
     assert_receive %DeviceSnapshotUpdated{snapshot: offline_device_snapshot}, 1_000
     assert offline_device_snapshot.status == :offline
+  end
+
+  test "poll callback crashes are converted into failure snapshots without killing the runner" do
+    device = test_device()
+    source_name = :glances
+
+    seed_app_health(device.id, source_name)
+    seed_snapshot(device)
+    start_supervised!({DeviceHub, device: device})
+
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.source_topic(device.id, source_name))
+
+    responses =
+      start_supervised!({Agent, fn -> [:raise, {:ok, %{cpu: 0.42}}] end})
+
+    runner =
+      start_supervised!(
+        {PollingSourceRunner,
+         module: CrashySource,
+         device: device,
+         source: %{name: source_name, interval_ms: 60_000, test_pid: responses}}
+      )
+
+    assert_receive %SourceSnapshotUpdated{source_snapshot: failed_snapshot}, 1_000
+    assert failed_snapshot.status == :unknown
+    assert failed_snapshot.last_error =~ "callback_crash"
+    assert Process.alive?(runner)
+
+    send(runner, :poll)
+
+    assert_receive %SourceSnapshotUpdated{source_snapshot: recovered_snapshot}, 1_000
+    assert recovered_snapshot.status == :ok
+    assert recovered_snapshot.metrics[:cpu_util_ratio] == 0.42
+    assert Process.alive?(runner)
   end
 
   defp test_device do

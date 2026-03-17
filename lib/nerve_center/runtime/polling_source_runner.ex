@@ -7,8 +7,11 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
   alias NerveCenter.Metrics.Catalog
   alias NerveCenter.Runtime.AppHealth
   alias NerveCenter.Runtime.PersistenceWriter
+  alias NerveCenter.Runtime.SnapshotStore
   alias NerveCenter.Snapshot.SourceSnapshot
   alias NerveCenter.Topology
+
+  require Logger
 
   def child_spec(opts) do
     device = Keyword.fetch!(opts, :device)
@@ -28,10 +31,13 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
 
   @impl true
   def init(opts) do
+    Process.flag(:message_queue_data, :off_heap)
+
     module = Keyword.fetch!(opts, :module)
     device = Keyword.fetch!(opts, :device)
     source = Keyword.fetch!(opts, :source)
     source_health = AppHealth.source_state(device.id, source.name)
+    source_snapshot = source_snapshot(device.id, source.name) || %{}
 
     state = %{
       module: module,
@@ -39,13 +45,18 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
       source: source,
       interval_ms: Map.get(source, :interval_ms, module.normal_interval_ms()),
       private: %{},
-      probe_data: nil,
-      last_ok_at: source_health.last_ok_at,
+      probe_data: Map.get(source_snapshot, :probe_data),
+      last_ok_at: source_health.last_ok_at || Map.get(source_snapshot, :last_ok_at),
       consecutive_failures: source_health.consecutive_failures,
       backoff_ms: source_health.backoff_ms,
       last_error: source_health.last_error,
-      ever_ok?: not is_nil(source_health.last_ok_at),
-      last_payload: %{metrics: %{}, data: %{}}
+      last_error_at: source_health.last_error_at,
+      ever_ok?:
+        not is_nil(source_health.last_ok_at) or Map.get(source_snapshot, :ever_ok?, false),
+      last_payload: %{
+        metrics: Map.get(source_snapshot, :metrics, %{}),
+        data: Map.get(source_snapshot, :data, %{})
+      }
     }
 
     {:ok, state, {:continue, :bootstrap}}
@@ -53,11 +64,23 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
 
   @impl true
   def handle_continue(:bootstrap, state) do
+    case remaining_backoff_ms(state) do
+      0 ->
+        state = run_probe(state)
+        {:noreply, poll_now(state)}
+
+      delay_ms ->
+        schedule_bootstrap_poll(delay_ms)
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info(:bootstrap_poll, state) do
     state = run_probe(state)
     {:noreply, poll_now(state)}
   end
 
-  @impl true
   def handle_info(:poll, state) do
     {:noreply, poll_now(state)}
   end
@@ -67,7 +90,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     recorded_at = DateTime.utc_now()
 
     probe_payload =
-      case state.module.probe(context) do
+      case safe_callback(state, :probe, fn -> state.module.probe(context) end) do
         {:ok, payload} -> %{ok: true, data: payload}
         {:error, reason} -> %{ok: false, error: inspect(reason)}
       end
@@ -85,7 +108,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
   defp poll_now(state) do
     context = context(state)
 
-    case state.module.poll(context) do
+    case safe_callback(state, :poll, fn -> state.module.poll(context) end) do
       {:ok, raw} ->
         handle_success(state, raw)
 
@@ -97,67 +120,12 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
   defp handle_success(state, raw) do
     context = context(state)
 
-    case state.module.normalize(raw, context) do
+    case safe_callback(state, :normalize, fn -> state.module.normalize(raw, context) end) do
       {:ok, payload} ->
-        observed_at = Map.get(payload, :observed_at, DateTime.utc_now())
-        normalized_metrics = Catalog.normalize(Map.get(payload, :metrics, []))
-        metric_map = Map.new(normalized_metrics, &{&1.metric_id, &1.metric_value})
-
-        PersistenceWriter.enqueue_samples(
-          Enum.map(normalized_metrics, fn metric ->
-            %{
-              device_id: Atom.to_string(state.device.id),
-              source: Atom.to_string(state.source.name),
-              metric_name: metric.metric_name,
-              metric_value: metric.metric_value / 1,
-              recorded_at: observed_at
-            }
-          end)
-        )
-
-        PersistenceWriter.enqueue_events(
-          Enum.map(Map.get(payload, :events, []), fn event ->
-            %{
-              device_id: Atom.to_string(state.device.id),
-              source: Atom.to_string(state.source.name),
-              event_type: Atom.to_string(Map.fetch!(event, :event_type)),
-              message: Map.fetch!(event, :message),
-              recorded_at: observed_at
-            }
-          end)
-        )
-
-        source_snapshot = %SourceSnapshot{
-          device_id: state.device.id,
-          source: state.source.name,
-          status: :ok,
-          observed_at: observed_at,
-          last_ok_at: observed_at,
-          last_error_at: nil,
-          last_error: nil,
-          probe_data: state.probe_data,
-          consecutive_failures: 0,
-          backoff_ms: 0,
-          ever_ok?: true,
-          metrics: metric_map,
-          data: Map.get(payload, :data, %{})
-        }
-
-        AppHealth.record_source_success(state.device.id, state.source.name, observed_at)
-        publish_source_snapshot(state, source_snapshot, observed_at)
-
-        schedule_poll(state.interval_ms)
-
-        %{
-          state
-          | private: Map.get(payload, :private, state.private),
-            last_ok_at: observed_at,
-            consecutive_failures: 0,
-            backoff_ms: 0,
-            ever_ok?: true,
-            last_error: nil,
-            last_payload: %{metrics: metric_map, data: Map.get(payload, :data, %{})}
-        }
+        case safe_step(state, :publish_success, fn -> do_handle_success(state, payload) end) do
+          {:ok, new_state} -> new_state
+          {:error, reason} -> handle_failure(state, reason)
+        end
 
       {:error, reason} ->
         handle_failure(state, reason)
@@ -192,7 +160,71 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
       state
       | consecutive_failures: state.consecutive_failures + 1,
         backoff_ms: backoff_ms,
+        last_error_at: observed_at,
         last_error: inspect(reason)
+    }
+  end
+
+  defp do_handle_success(state, payload) do
+    observed_at = Map.get(payload, :observed_at, DateTime.utc_now())
+    normalized_metrics = Catalog.normalize(Map.get(payload, :metrics, []))
+    metric_map = Map.new(normalized_metrics, &{&1.metric_id, &1.metric_value})
+    data = Map.get(payload, :data, %{})
+
+    PersistenceWriter.enqueue_samples(
+      Enum.map(normalized_metrics, fn metric ->
+        %{
+          device_id: Atom.to_string(state.device.id),
+          source: Atom.to_string(state.source.name),
+          metric_name: metric.metric_name,
+          metric_value: metric.metric_value / 1,
+          recorded_at: observed_at
+        }
+      end)
+    )
+
+    PersistenceWriter.enqueue_events(
+      Enum.map(Map.get(payload, :events, []), fn event ->
+        %{
+          device_id: Atom.to_string(state.device.id),
+          source: Atom.to_string(state.source.name),
+          event_type: Atom.to_string(Map.fetch!(event, :event_type)),
+          message: Map.fetch!(event, :message),
+          recorded_at: observed_at
+        }
+      end)
+    )
+
+    source_snapshot = %SourceSnapshot{
+      device_id: state.device.id,
+      source: state.source.name,
+      status: :ok,
+      observed_at: observed_at,
+      last_ok_at: observed_at,
+      last_error_at: nil,
+      last_error: nil,
+      probe_data: state.probe_data,
+      consecutive_failures: 0,
+      backoff_ms: 0,
+      ever_ok?: true,
+      metrics: metric_map,
+      data: data
+    }
+
+    AppHealth.record_source_success(state.device.id, state.source.name, observed_at)
+    publish_source_snapshot(state, source_snapshot, observed_at)
+    schedule_poll(state.interval_ms)
+
+    %{
+      state
+      | private: Map.get(payload, :private, state.private),
+        last_ok_at: observed_at,
+        consecutive_failures: 0,
+        backoff_ms: 0,
+        last_error_at: nil,
+        ever_ok?: true,
+        last_error: nil,
+        last_payload: %{metrics: metric_map, data: data}
     }
   end
 
@@ -297,6 +329,62 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
         DateTime.diff(DateTime.utc_now(), last_ok_at, :millisecond) >
           state.module.stale_after_ms()
     end
+  end
+
+  defp source_snapshot(device_id, source_name) do
+    device_id
+    |> SnapshotStore.snapshot()
+    |> case do
+      %{sources: sources} -> Map.get(sources, source_name)
+      _ -> nil
+    end
+  end
+
+  defp remaining_backoff_ms(%{backoff_ms: 0}), do: 0
+
+  defp remaining_backoff_ms(%{backoff_ms: backoff_ms, last_error_at: %DateTime{} = last_error_at}) do
+    elapsed_ms = DateTime.diff(DateTime.utc_now(), last_error_at, :millisecond)
+    max(backoff_ms - elapsed_ms, 0)
+  end
+
+  defp remaining_backoff_ms(%{backoff_ms: backoff_ms}), do: backoff_ms
+
+  defp safe_callback(state, callback_name, fun) do
+    case safe_step(state, callback_name, fun) do
+      {:ok, {:ok, _} = ok} ->
+        ok
+
+      {:ok, {:error, _} = error} ->
+        error
+
+      {:ok, other} ->
+        {:error, {:invalid_callback_return, callback_name, other}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp safe_step(state, label, fun) do
+    {:ok, fun.()}
+  rescue
+    error ->
+      Logger.error(
+        "polling source #{state.device.id}/#{state.source.name} #{label} crashed: #{Exception.message(error)}"
+      )
+
+      {:error, {:callback_crash, label, Exception.message(error)}}
+  catch
+    kind, reason ->
+      Logger.error(
+        "polling source #{state.device.id}/#{state.source.name} #{label} #{kind}: #{inspect(reason)}"
+      )
+
+      {:error, {:callback_crash, label, {kind, reason}}}
+  end
+
+  defp schedule_bootstrap_poll(ms) do
+    Process.send_after(self(), :bootstrap_poll, ms)
   end
 
   defp schedule_poll(ms) do

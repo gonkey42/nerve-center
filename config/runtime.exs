@@ -21,10 +21,23 @@ if System.get_env("PHX_SERVER") do
 end
 
 if config_env() == :prod do
-  db_path = "/Users/hal9000/claudebot/data/nerve-center/nerve_center.sqlite3"
-  backup_dir = "/Users/hal9000/claudebot/data/nerve-center/backups/"
-  log_dir = "/Users/hal9000/claudebot/logs/nerve-center/"
-  app_log = Path.join(log_dir, "app.log")
+  data_dir =
+    System.get_env("NERVE_CENTER_DATA_DIR") || "/Users/hal9000/claudebot/data/nerve-center"
+
+  db_path =
+    System.get_env("NERVE_CENTER_DB_PATH") || Path.join(data_dir, "nerve_center.sqlite3")
+
+  backup_dir =
+    System.get_env("NERVE_CENTER_BACKUP_DIR") || Path.join(data_dir, "backups")
+
+  app_log =
+    System.get_env("NERVE_CENTER_APP_LOG") ||
+      Path.join(
+        System.get_env("NERVE_CENTER_LOG_DIR") || "/Users/hal9000/claudebot/logs/nerve-center",
+        "app.log"
+      )
+
+  log_dir = System.get_env("NERVE_CENTER_LOG_DIR") || Path.dirname(app_log)
   public_host = System.get_env("PUBLIC_HOST") || ""
   secret_key_base = System.get_env("SECRET_KEY_BASE") || ""
   release_cookie = System.get_env("RELEASE_COOKIE") || ""
@@ -44,6 +57,14 @@ if config_env() == :prod do
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5")
 
   config :nerve_center, :release_cookie, release_cookie
+
+  config :logger, :default_handler,
+    config: [
+      file: String.to_charlist(app_log),
+      max_no_bytes: 10_485_760,
+      max_no_files: 5,
+      filesync_repeat_interval: 5_000
+    ]
 
   config :nerve_center, NerveCenterWeb.Endpoint,
     url: [host: public_host, port: 443, scheme: "https"],

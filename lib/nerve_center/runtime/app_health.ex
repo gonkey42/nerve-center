@@ -20,16 +20,7 @@ defmodule NerveCenter.Runtime.AppHealth do
   end
 
   def source_state(device_id, source_name) do
-    snapshot().sources[{device_id, source_name}] ||
-      %{
-        device_id: device_id,
-        source: source_name,
-        last_ok_at: nil,
-        consecutive_failures: 0,
-        backoff_ms: 0,
-        last_error_at: nil,
-        last_error: nil
-      }
+    snapshot().sources[{device_id, source_name}] || default_source_state(device_id, source_name)
   end
 
   def record_source_success(device_id, source_name, observed_at) do
@@ -74,7 +65,7 @@ defmodule NerveCenter.Runtime.AppHealth do
   def handle_cast({:source_success, device_id, source_name, observed_at}, state) do
     source_state =
       state.sources
-      |> Map.fetch!({device_id, source_name})
+      |> Map.get({device_id, source_name}, default_source_state(device_id, source_name))
       |> Map.merge(%{
         last_ok_at: observed_at,
         consecutive_failures: 0,
@@ -93,7 +84,7 @@ defmodule NerveCenter.Runtime.AppHealth do
 
     source_state =
       state.sources
-      |> Map.fetch!({device_id, source_name})
+      |> Map.get({device_id, source_name}, default_source_state(device_id, source_name))
       |> Map.update!(:consecutive_failures, &(&1 + 1))
       |> Map.merge(%{
         backoff_ms: backoff_ms,
@@ -125,17 +116,20 @@ defmodule NerveCenter.Runtime.AppHealth do
 
   defp seed_sources do
     for {device, source} <- Topology.enabled_sources(), into: %{} do
-      {{device.id, source.name},
-       %{
-         device_id: device.id,
-         source: source.name,
-         last_ok_at: nil,
-         consecutive_failures: 0,
-         backoff_ms: 0,
-         last_error_at: nil,
-         last_error: nil
-       }}
+      {{device.id, source.name}, default_source_state(device.id, source.name)}
     end
+  end
+
+  defp default_source_state(device_id, source_name) do
+    %{
+      device_id: device_id,
+      source: source_name,
+      last_ok_at: nil,
+      consecutive_failures: 0,
+      backoff_ms: 0,
+      last_error_at: nil,
+      last_error: nil
+    }
   end
 
   defp broadcast(state) do

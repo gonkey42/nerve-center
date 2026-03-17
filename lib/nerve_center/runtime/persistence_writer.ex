@@ -27,30 +27,34 @@ defmodule NerveCenter.Runtime.PersistenceWriter do
 
   @impl true
   def init(_state) do
+    Process.flag(:message_queue_data, :off_heap)
     schedule_flush()
 
     {:ok,
      %{
        samples: [],
+       sample_count: 0,
        events: [],
+       event_count: 0,
        probes: [],
+       probe_count: 0,
        maintenance: :idle
      }}
   end
 
   @impl true
   def handle_cast({:enqueue_samples, rows}, state) do
-    new_state = %{state | samples: state.samples ++ rows}
+    new_state = enqueue_rows(state, :samples, :sample_count, rows)
     maybe_flush(new_state)
   end
 
   def handle_cast({:enqueue_events, rows}, state) do
-    new_state = %{state | events: state.events ++ rows}
+    new_state = enqueue_rows(state, :events, :event_count, rows)
     maybe_flush(new_state)
   end
 
   def handle_cast({:enqueue_probe, row}, state) do
-    new_state = %{state | probes: state.probes ++ [row]}
+    new_state = enqueue_rows(state, :probes, :probe_count, [row])
     maybe_flush(new_state)
   end
 
@@ -110,12 +114,21 @@ defmodule NerveCenter.Runtime.PersistenceWriter do
     if queue_depth(state) == 0 do
       state
     else
-      insert_all(NerveCenter.Persistence.DeviceSample, state.samples)
-      insert_all(NerveCenter.Persistence.DeviceEvent, state.events)
-      insert_all(NerveCenter.Persistence.SourceProbe, state.probes)
+      insert_all(NerveCenter.Persistence.DeviceSample, Enum.reverse(state.samples))
+      insert_all(NerveCenter.Persistence.DeviceEvent, Enum.reverse(state.events))
+      insert_all(NerveCenter.Persistence.SourceProbe, Enum.reverse(state.probes))
       flushed_at = DateTime.utc_now()
       AppHealth.record_persistence(0, flushed_at)
-      %{state | samples: [], events: [], probes: []}
+
+      %{
+        state
+        | samples: [],
+          sample_count: 0,
+          events: [],
+          event_count: 0,
+          probes: [],
+          probe_count: 0
+      }
     end
   end
 
@@ -123,7 +136,7 @@ defmodule NerveCenter.Runtime.PersistenceWriter do
   defp insert_all(table, rows), do: Repo.insert_all(table, rows)
 
   defp queue_depth(state) do
-    length(state.samples) + length(state.events) + length(state.probes)
+    state.sample_count + state.event_count + state.probe_count
   end
 
   defp schedule_flush do
@@ -135,11 +148,20 @@ defmodule NerveCenter.Runtime.PersistenceWriter do
       {:rollups, DateTime.add(triggered_at, -3_600, :second)},
       {:delete_batches, "device_samples", "recorded_at",
        DateTime.add(triggered_at, -7 * 86_400, :second)},
+      {:delete_batches, "source_probes", "probed_at",
+       DateTime.add(triggered_at, -7 * 86_400, :second)},
       {:delete_batches, "device_hourly_rollups", "bucket_start_at",
        DateTime.add(triggered_at, -30 * 86_400, :second)},
       {:delete_batches, "device_events", "recorded_at",
        DateTime.add(triggered_at, -90 * 86_400, :second)}
     ]
+  end
+
+  defp enqueue_rows(state, rows_key, count_key, rows) do
+    Map.merge(state, %{
+      rows_key => Enum.reverse(rows, Map.fetch!(state, rows_key)),
+      count_key => Map.fetch!(state, count_key) + length(rows)
+    })
   end
 
   defp run_maintenance_step({:rollups, cutoff}) do

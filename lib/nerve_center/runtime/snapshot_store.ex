@@ -7,6 +7,7 @@ defmodule NerveCenter.Runtime.SnapshotStore do
   alias NerveCenter.Topology
 
   @table __MODULE__
+  @active_device_ids MapSet.new(Enum.map(Topology.enabled_devices(), & &1.id))
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
@@ -20,8 +21,12 @@ defmodule NerveCenter.Runtime.SnapshotStore do
   end
 
   def put(%DeviceSnapshot{device_id: device_id} = snapshot) do
-    :ets.insert(@table, {device_id, snapshot})
-    :ok
+    if allow_device?(device_id) do
+      :ets.insert(@table, {device_id, snapshot})
+      :ok
+    else
+      {:error, :unknown_device}
+    end
   end
 
   def all_snapshots do
@@ -38,9 +43,14 @@ defmodule NerveCenter.Runtime.SnapshotStore do
   end
 
   defp seed_unknown_snapshots do
-    Enum.each(Topology.all_devices(), fn device ->
+    Enum.each(Topology.enabled_devices(), fn device ->
       :ets.insert_new(@table, {device.id, unknown_snapshot(device)})
     end)
+  end
+
+  defp allow_device?(device_id) do
+    Application.get_env(:nerve_center, :allow_unknown_runtime_devices, false) or
+      MapSet.member?(@active_device_ids, device_id)
   end
 
   defp unknown_snapshot(device) do

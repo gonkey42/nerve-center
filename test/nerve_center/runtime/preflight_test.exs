@@ -1,6 +1,7 @@
 defmodule NerveCenter.Runtime.PreflightTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
+  alias NerveCenter.Paths
   alias NerveCenter.Runtime.Preflight
 
   test "required env only includes enabled source env" do
@@ -17,5 +18,27 @@ defmodule NerveCenter.Runtime.PreflightTest do
     assert "IMMICH_API_KEY" in required_env
     assert "HA_TOKEN" in required_env
     assert "UNIFI_API_KEY" in required_env
+  end
+
+  test "verify! raises and writes to the boot log when a required env is missing" do
+    log_path = Paths.app_log_path()
+    File.rm(log_path)
+
+    previous = System.get_env("PUBLIC_HOST")
+    System.delete_env("PUBLIC_HOST")
+
+    on_exit(fn ->
+      if is_nil(previous) do
+        System.delete_env("PUBLIC_HOST")
+      else
+        System.put_env("PUBLIC_HOST", previous)
+      end
+    end)
+
+    assert_raise RuntimeError, ~r/missing required env: PUBLIC_HOST/, fn ->
+      Preflight.verify!()
+    end
+
+    assert File.read!(log_path) =~ "missing required env: PUBLIC_HOST"
   end
 end

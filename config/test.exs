@@ -23,6 +23,8 @@ config :nerve_center, :paths,
   log_dir: Path.expand("../tmp/test/logs", __DIR__),
   app_log: Path.expand("../tmp/test/logs/app.log", __DIR__)
 
+config :nerve_center, :allow_unknown_runtime_devices, true
+
 # Configure your database
 #
 # The MIX_TEST_PARTITION environment variable can be used

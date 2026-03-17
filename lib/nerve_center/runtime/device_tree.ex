@@ -17,6 +17,6 @@ defmodule NerveCenter.Runtime.DeviceTree do
         source.module.child_spec(device: device, source: source)
       end)
 
-    Supervisor.init([hub_child | source_children], strategy: :rest_for_one)
+    Supervisor.init([hub_child | source_children], strategy: :one_for_one)
   end
 end
