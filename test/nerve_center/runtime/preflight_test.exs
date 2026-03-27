@@ -9,7 +9,6 @@ defmodule NerveCenter.Runtime.PreflightTest do
 
     assert "SECRET_KEY_BASE" in required_env
     assert "RELEASE_COOKIE" in required_env
-    assert "PUBLIC_HOST" in required_env
     assert "PLEX_TOKEN" in required_env
 
     assert "PIHOLE_APP_PASSWORD" in required_env
@@ -24,21 +23,21 @@ defmodule NerveCenter.Runtime.PreflightTest do
     log_path = Paths.app_log_path()
     File.rm(log_path)
 
-    previous = System.get_env("PUBLIC_HOST")
-    System.delete_env("PUBLIC_HOST")
+    previous = System.get_env("SECRET_KEY_BASE")
+    System.delete_env("SECRET_KEY_BASE")
 
     on_exit(fn ->
       if is_nil(previous) do
-        System.delete_env("PUBLIC_HOST")
+        System.delete_env("SECRET_KEY_BASE")
       else
-        System.put_env("PUBLIC_HOST", previous)
+        System.put_env("SECRET_KEY_BASE", previous)
       end
     end)
 
-    assert_raise RuntimeError, ~r/missing required env: PUBLIC_HOST/, fn ->
+    assert_raise RuntimeError, ~r/missing required env: SECRET_KEY_BASE/, fn ->
       Preflight.verify!()
     end
 
-    assert File.read!(log_path) =~ "missing required env: PUBLIC_HOST"
+    assert File.read!(log_path) =~ "missing required env: SECRET_KEY_BASE"
   end
 end

@@ -22,8 +22,6 @@
     <string>REPLACE_ME</string>
     <key>RELEASE_COOKIE</key>
     <string>REPLACE_ME</string>
-    <key>PUBLIC_HOST</key>
-    <string>REPLACE_ME</string>
     <key>PIHOLE_APP_PASSWORD</key>
     <string>REPLACE_ME</string>
     <key>IMMICH_API_KEY</key>

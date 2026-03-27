@@ -3,7 +3,6 @@ import Config
 for {key, value} <- [
       {"SECRET_KEY_BASE", "dev-secret-key-base"},
       {"RELEASE_COOKIE", "dev-release-cookie"},
-      {"PUBLIC_HOST", "localhost"},
       {"PLEX_TOKEN", "dev-plex-token"}
     ] do
   if is_nil(System.get_env(key)) do

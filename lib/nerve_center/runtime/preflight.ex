@@ -4,7 +4,7 @@ defmodule NerveCenter.Runtime.Preflight do
   alias NerveCenter.Runtime.BootLog
   alias NerveCenter.Topology
 
-  @global_required_env ["SECRET_KEY_BASE", "RELEASE_COOKIE", "PUBLIC_HOST"]
+  @global_required_env ["SECRET_KEY_BASE", "RELEASE_COOKIE"]
 
   def verify! do
     missing =

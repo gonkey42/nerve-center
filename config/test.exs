@@ -3,7 +3,6 @@ import Config
 for {key, value} <- [
       {"SECRET_KEY_BASE", "test-secret-key-base"},
       {"RELEASE_COOKIE", "test-release-cookie"},
-      {"PUBLIC_HOST", "localhost"},
       {"PLEX_TOKEN", "test-plex-token"},
       {"PIHOLE_APP_PASSWORD", "test-pihole-password"},
       {"NUT_USERNAME", "test-nut-user"},

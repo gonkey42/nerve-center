@@ -38,7 +38,7 @@ if config_env() == :prod do
       )
 
   log_dir = System.get_env("NERVE_CENTER_LOG_DIR") || Path.dirname(app_log)
-  public_host = System.get_env("PUBLIC_HOST") || ""
+  public_host = System.get_env("PUBLIC_HOST") || "0.0.0.0"
   secret_key_base = System.get_env("SECRET_KEY_BASE") || ""
   release_cookie = System.get_env("RELEASE_COOKIE") || ""
 
@@ -67,9 +67,9 @@ if config_env() == :prod do
     ]
 
   config :nerve_center, NerveCenterWeb.Endpoint,
-    url: [host: public_host, port: 443, scheme: "https"],
+    url: [host: public_host, port: 4041, scheme: "http"],
     http: [
-      ip: {127, 0, 0, 1},
+      ip: {0, 0, 0, 0},
       port: 4041
     ],
     secret_key_base: secret_key_base
