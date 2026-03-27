@@ -72,5 +72,6 @@ if config_env() == :prod do
       ip: {0, 0, 0, 0},
       port: 4041
     ],
+    check_origin: false,
     secret_key_base: secret_key_base
 end
