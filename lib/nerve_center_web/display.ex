@@ -62,6 +62,9 @@ defmodule NerveCenterWeb.Display do
   def volts(nil), do: "-"
   def volts(value) when is_number(value), do: "#{Float.round(value / 1, 1)} V"
 
+  def watts(nil), do: "-"
+  def watts(value) when is_number(value), do: "#{Float.round(value / 1, 1)} W"
+
   def count(nil), do: "-"
   def count(value) when is_integer(value), do: Integer.to_string(value)
   def count(value) when is_float(value), do: Integer.to_string(round(value))
@@ -86,6 +89,7 @@ defmodule NerveCenterWeb.Display do
       %{display_format: :duration} -> duration(value)
       %{display_format: :boolean} -> boolean(value)
       %{display_format: :volts} -> volts(value)
+      %{display_format: :watts} -> watts(value)
       %{display_format: :count} -> count(value)
       %{display_format: :fps} -> count(value)
       _ -> to_string(value || "-")

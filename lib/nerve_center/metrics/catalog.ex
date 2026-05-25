@@ -130,6 +130,14 @@ defmodule NerveCenter.Metrics.Catalog do
       rollup?: true,
       prometheus_name: "ups_load_ratio"
     },
+    ups_current_load_watts: %{
+      id: :ups_current_load_watts,
+      unit: :watts,
+      value_type: :float,
+      display_format: :watts,
+      rollup?: true,
+      prometheus_name: "ups_current_load_watts"
+    },
     ups_input_voltage_volts: %{
       id: :ups_input_voltage_volts,
       unit: :volts,

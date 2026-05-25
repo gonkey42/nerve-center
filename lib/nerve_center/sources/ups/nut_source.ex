@@ -48,23 +48,26 @@ defmodule NerveCenter.Sources.Ups.NUTSource do
          {:ok, input_voltage} <- fetch_float(raw, "input.voltage") do
       status = Map.get(raw, "ups.status", "")
       status_tokens = String.split(status, " ", trim: true)
+      current_load_watts = current_load_watts(raw, ups_load)
 
       {:ok,
        %{
          observed_at: DateTime.utc_now(),
-         metrics: [
-           %{metric: :ups_battery_charge_ratio, value: battery_charge / 100},
-           %{metric: :ups_battery_runtime_seconds, value: battery_runtime},
-           %{metric: :ups_load_ratio, value: ups_load / 100},
-           %{metric: :ups_input_voltage_volts, value: input_voltage},
-           %{metric: :ups_on_battery_flag, value: flag(status_tokens, "OB")},
-           %{metric: :ups_low_battery_flag, value: flag(status_tokens, "LB")}
-         ],
+         metrics:
+           [
+             %{metric: :ups_battery_charge_ratio, value: battery_charge / 100},
+             %{metric: :ups_battery_runtime_seconds, value: battery_runtime},
+             %{metric: :ups_load_ratio, value: ups_load / 100},
+             %{metric: :ups_input_voltage_volts, value: input_voltage},
+             %{metric: :ups_on_battery_flag, value: flag(status_tokens, "OB")},
+             %{metric: :ups_low_battery_flag, value: flag(status_tokens, "LB")}
+           ] ++ optional_metric(:ups_current_load_watts, current_load_watts),
          data: %{
            status: status,
            battery_charge_percent: battery_charge,
            battery_runtime_seconds: battery_runtime,
            load_percent: ups_load,
+           current_load_watts: current_load_watts,
            input_voltage_volts: input_voltage,
            output_voltage_volts: fetch_optional_float(raw, "output.voltage"),
            battery_voltage_volts: fetch_optional_float(raw, "battery.voltage"),
@@ -77,6 +80,17 @@ defmodule NerveCenter.Sources.Ups.NUTSource do
        }}
     end
   end
+
+  defp current_load_watts(raw, ups_load) do
+    fetch_optional_float(raw, "ups.realpower") ||
+      case fetch_optional_float(raw, "ups.realpower.nominal") do
+        nil -> nil
+        nominal_watts -> nominal_watts * ups_load / 100
+      end
+  end
+
+  defp optional_metric(_metric, nil), do: []
+  defp optional_metric(metric, value), do: [%{metric: metric, value: value}]
 
   defp with_socket(device, fun) do
     host = String.to_charlist(device.nut_host)

@@ -106,8 +106,8 @@ defmodule NerveCenterWeb.DashboardLive do
                 />
                 <.metric label="Load" value={Display.percent(snapshot.metrics[:ups_load_ratio])} />
                 <.metric
-                  label="Input"
-                  value={Display.volts(snapshot.metrics[:ups_input_voltage_volts])}
+                  label="Current Load"
+                  value={Display.watts(snapshot.metrics[:ups_current_load_watts])}
                 />
                 <.metric
                   label="Status"

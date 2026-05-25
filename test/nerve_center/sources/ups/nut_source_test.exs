@@ -73,6 +73,7 @@ defmodule NerveCenter.Sources.Ups.NUTSourceTest do
                  "battery.charge" => "100",
                  "battery.runtime" => "1025",
                  "ups.load" => "30",
+                 "ups.realpower.nominal" => "510",
                  "input.voltage" => "122.0",
                  "output.voltage" => "122.0",
                  "battery.voltage" => "14.2",
@@ -91,6 +92,7 @@ defmodule NerveCenter.Sources.Ups.NUTSourceTest do
     assert metrics.ups_battery_charge_ratio == 1.0
     assert metrics.ups_battery_runtime_seconds == 1025
     assert metrics.ups_load_ratio == 0.3
+    assert metrics.ups_current_load_watts == 153.0
     assert metrics.ups_input_voltage_volts == 122.0
     assert metrics.ups_on_battery_flag == 0
     assert metrics.ups_low_battery_flag == 0
