@@ -21,7 +21,7 @@ defmodule NerveCenterWeb.SourceLive do
 
     {:ok,
      assign(socket,
-       page_title: "#{device.label} #{source.name}",
+       page_title: "#{device.label} #{Display.source_name(source)}",
        device: device,
        source: source,
        source_snapshot: current_source_snapshot(device.id, source.name),
@@ -48,10 +48,10 @@ defmodule NerveCenterWeb.SourceLive do
         <div class="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <h1 class="text-4xl font-semibold tracking-tight text-stone-50">
-              {@device.label} / {@source.name}
+              {@device.label} / {Display.source_name(@source)}
             </h1>
             <p class="mt-2 max-w-2xl text-sm text-stone-300">
-              Probe data, current snapshot, and failure state for {inspect(@source.module)}.
+              Probe data, current snapshot, and failure state for {Display.source_name(@source)}.
             </p>
           </div>
           <nav class="flex gap-3 text-sm">
@@ -112,7 +112,11 @@ defmodule NerveCenterWeb.SourceLive do
             <h2 class="text-lg font-semibold text-stone-50">Probe</h2>
           </div>
           <div class="px-6 py-5">
-            <pre class="overflow-x-auto whitespace-pre-wrap text-sm text-stone-200">{pretty(@source_snapshot && @source_snapshot.probe_data || %{})}</pre>
+            <.data_view
+              device={@device}
+              source={@source}
+              data={(@source_snapshot && @source_snapshot.probe_data) || %{}}
+            />
           </div>
         </article>
       </section>
@@ -171,7 +175,10 @@ defmodule NerveCenterWeb.SourceLive do
         </div>
       </section>
 
-      <section class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80">
+      <section
+        :if={show_current_data?(@source, @source_snapshot)}
+        class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80"
+      >
         <div class="border-b border-stone-800 px-6 py-4">
           <h2 class="text-lg font-semibold text-stone-50">Metrics</h2>
         </div>
@@ -191,12 +198,19 @@ defmodule NerveCenterWeb.SourceLive do
         </div>
       </section>
 
-      <section class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80">
+      <section
+        :if={show_current_data?(@source, @source_snapshot)}
+        class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80"
+      >
         <div class="border-b border-stone-800 px-6 py-4">
           <h2 class="text-lg font-semibold text-stone-50">Current Data</h2>
         </div>
         <div class="px-6 py-5">
-          <pre class="overflow-x-auto whitespace-pre-wrap text-sm text-stone-200">{pretty(@source_snapshot && @source_snapshot.data || %{})}</pre>
+          <.data_view
+            device={@device}
+            source={@source}
+            data={(@source_snapshot && @source_snapshot.data) || %{}}
+          />
         </div>
       </section>
     </main>
@@ -239,6 +253,85 @@ defmodule NerveCenterWeb.SourceLive do
       </div>
     </div>
     """
+  end
+
+  attr :device, :map, required: true
+  attr :source, :map, required: true
+  attr :data, :map, required: true
+
+  defp data_view(%{source: %{name: :launchd}, data: %{data: %{labels: labels}}} = assigns)
+       when is_list(labels) do
+    ~H"""
+    <div class="flex flex-wrap gap-2">
+      <span
+        :for={label <- @data.data.labels}
+        class="rounded-full border border-stone-700 px-3 py-1 text-xs text-stone-200"
+      >
+        {launchd_label_name(@device, label)}
+      </span>
+    </div>
+    """
+  end
+
+  defp data_view(%{source: %{name: :ha_web_socket}, data: %{data: data, ok: ok}} = assigns) do
+    assigns =
+      assign(assigns,
+        ok: ok,
+        auth: Display.humanize(Map.get(data, :auth, "-")),
+        event_type: Display.humanize(Map.get(data, :event_type, "-")),
+        entity_count: data |> Map.get(:curated_entity_ids, []) |> length(),
+        websocket_path: Map.get(data, :websocket_path, "-")
+      )
+
+    ~H"""
+    <div class="grid gap-4 sm:grid-cols-2">
+      <.kv label="Probe" value={if @ok, do: "OK", else: "Failed"} />
+      <.kv label="Auth" value={@auth} />
+      <.kv label="Event" value={@event_type} />
+      <.kv label="Tracked Entities" value={to_string(@entity_count)} />
+      <.kv label="Path" value={@websocket_path} />
+    </div>
+    """
+  end
+
+  defp data_view(%{source: %{name: :launchd}, data: %{services: services}} = assigns)
+       when is_list(services) do
+    ~H"""
+    <div class="overflow-x-auto">
+      <table class="min-w-full divide-y divide-stone-800 text-sm">
+        <thead class="bg-stone-950/70 text-left text-xs uppercase tracking-[0.24em] text-stone-400">
+          <tr>
+            <th class="px-4 py-3">App</th>
+            <th class="px-4 py-3">State</th>
+            <th class="px-4 py-3">PID</th>
+            <th class="px-4 py-3">Last Exit</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-stone-800 text-stone-200">
+          <tr :for={service <- @data.services}>
+            <td class="px-4 py-3 font-medium text-stone-100">
+              {Map.get(service, :display_name) || service.label}
+            </td>
+            <td class="px-4 py-3">{if service.running, do: "running", else: "stopped"}</td>
+            <td class="px-4 py-3">{Map.get(service, :pid) || "-"}</td>
+            <td class="px-4 py-3">{Map.get(service, :last_exit_status) || "-"}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    """
+  end
+
+  defp data_view(assigns) do
+    ~H"""
+    <pre class="overflow-x-auto whitespace-pre-wrap text-sm text-stone-200">{pretty(@data)}</pre>
+    """
+  end
+
+  defp show_current_data?(%{name: :launchd}, _source_snapshot), do: true
+
+  defp show_current_data?(_source, source_snapshot) do
+    preview_entries(source_snapshot) == [] and ha_entities(source_snapshot) == []
   end
 
   defp current_source_snapshot(device_id, source_name) do
@@ -291,6 +384,14 @@ defmodule NerveCenterWeb.SourceLive do
 
   defp entity_state(%{state: state, unit_of_measurement: nil}), do: state
   defp entity_state(%{state: state, unit_of_measurement: unit}), do: "#{state} #{unit}"
+
+  defp launchd_label_name(device, label) do
+    Enum.find_value(device.launchd_labels, label, fn
+      %{label: ^label, display_name: display_name} -> display_name
+      ^label -> label
+      _ -> nil
+    end)
+  end
 
   defp pretty(data), do: inspect(data, pretty: true, limit: :infinity)
 end

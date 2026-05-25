@@ -11,15 +11,9 @@ config :nerve_center, :devices, [
     offline_expected: false,
     hub_module: NerveCenter.Devices.HAL9000Hub,
     launchd_labels: [
-      "com.claudebot.title-standards",
-      "com.claudebot.heartbeat",
-      "com.claudebot.dashboard-v3",
-      "com.claudebot.olympics-2026",
-      "com.claudebot.land-scout-v3",
-      "com.claudebot.basecamp",
-      "com.claudebot.braindump",
-      "com.claudebot.youtube-ripper",
-      "com.claudebot.landscout-scrape"
+      %{label: "com.claudebot.youtube-ripper", display_name: "YouTube Ripper"},
+      %{label: "com.spendsense.app", display_name: "SpendSense"},
+      %{label: "com.claudebot.nerve-center", display_name: "Nerve Center"}
     ],
     plex_base_url: "http://127.0.0.1:32400",
     sources: [

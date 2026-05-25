@@ -40,11 +40,11 @@ defmodule NerveCenter.Runtime.PersistenceWriterTest do
     PersistenceWriter.enqueue_samples(rows)
 
     wait_until(fn ->
-      Repo.aggregate(DeviceSample, :count, :id) == 250 and
+      count_rows(DeviceSample, "load-test") == 250 and
         AppHealth.snapshot().persistence.queue_depth == 0
     end)
 
-    assert Repo.aggregate(DeviceSample, :count, :id) == 250
+    assert count_rows(DeviceSample, "load-test") == 250
   end
 
   test "drains a 10,000 message probe burst without leaving backlog behind" do
@@ -66,20 +66,31 @@ defmodule NerveCenter.Runtime.PersistenceWriterTest do
 
     wait_until(
       fn ->
-        Repo.aggregate(SourceProbe, :count, :id) == 10_000 and
+        count_rows(SourceProbe, "mailbox-burst") == 10_000 and
           Process.info(writer_pid, :message_queue_len) == {:message_queue_len, 0}
       end,
       5_000
     )
 
-    assert Repo.aggregate(SourceProbe, :count, :id) == 10_000
+    assert count_rows(SourceProbe, "mailbox-burst") == 10_000
     assert Process.info(writer_pid, :message_queue_len) == {:message_queue_len, 0}
-    assert AppHealth.snapshot().persistence.queue_depth == 0
+
+    wait_until(fn ->
+      AppHealth.snapshot().persistence.queue_depth == 0
+    end)
   end
 
   test "maintenance prunes expired rows and rolls up old samples" do
     triggered_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-    old_sample_time = DateTime.add(triggered_at, -8 * 86_400, :second)
+    old_sample_base = DateTime.add(triggered_at, -8 * 86_400, :second)
+
+    old_sample_time =
+      DateTime.new!(
+        DateTime.to_date(old_sample_base),
+        Time.new!(old_sample_base.hour, 10, 0, {0, 6}),
+        "Etc/UTC"
+      )
+
     recent_sample_time = DateTime.add(triggered_at, -1_800, :second)
 
     Repo.insert_all(DeviceSample, [
@@ -154,18 +165,20 @@ defmodule NerveCenter.Runtime.PersistenceWriterTest do
     PersistenceWriter.run_maintenance(triggered_at)
 
     wait_until(fn ->
-      Repo.aggregate(DeviceSample, :count, :id) == 1 and
-        Repo.aggregate(SourceProbe, :count, :id) == 1 and
-        Repo.aggregate(DeviceEvent, :count, :id) == 1 and
-        Repo.aggregate(DeviceHourlyRollup, :count, :id) == 1 and
+      count_rows(DeviceSample, "retention-test") == 1 and
+        count_rows(SourceProbe, "retention-test") == 1 and
+        count_rows(DeviceEvent, "retention-test") == 1 and
+        count_rows(DeviceHourlyRollup, "retention-test") == 1 and
         AppHealth.snapshot().retention.status == :ok
     end)
 
-    assert Repo.aggregate(DeviceSample, :count, :id) == 1
-    assert Repo.aggregate(SourceProbe, :count, :id) == 1
-    assert Repo.aggregate(DeviceEvent, :count, :id) == 1
+    assert count_rows(DeviceSample, "retention-test") == 1
+    assert count_rows(SourceProbe, "retention-test") == 1
+    assert count_rows(DeviceEvent, "retention-test") == 1
 
-    rollup = Repo.one!(from(rollup in DeviceHourlyRollup))
+    rollup =
+      Repo.one!(from(rollup in DeviceHourlyRollup, where: rollup.device_id == "retention-test"))
+
     assert rollup.sample_count == 2
     assert rollup.min_value == 0.2
     assert rollup.max_value == 0.6
@@ -207,13 +220,17 @@ defmodule NerveCenter.Runtime.PersistenceWriterTest do
     PersistenceWriter.run_maintenance(triggered_at)
 
     wait_until(fn ->
-      Repo.aggregate(DeviceSample, :count, :id) == 0 and
-        Repo.aggregate(DeviceHourlyRollup, :count, :id) == 1 and
+      count_rows(DeviceSample, "existing-rollup") == 0 and
+        count_rows(DeviceHourlyRollup, "existing-rollup") == 1 and
         AppHealth.snapshot().retention.status == :ok
     end)
 
-    assert Repo.aggregate(DeviceSample, :count, :id) == 0
-    assert Repo.aggregate(DeviceHourlyRollup, :count, :id) == 1
+    assert count_rows(DeviceSample, "existing-rollup") == 0
+    assert count_rows(DeviceHourlyRollup, "existing-rollup") == 1
+  end
+
+  defp count_rows(schema, device_id) do
+    Repo.aggregate(from(row in schema, where: row.device_id == ^device_id), :count, :id)
   end
 
   defp reset_runtime_state do

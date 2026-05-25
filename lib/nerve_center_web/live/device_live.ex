@@ -168,8 +168,8 @@ defmodule NerveCenterWeb.DeviceLive do
           <% source_health = @health.sources[{@device.id, source.name}] %>
           <div class="flex items-start justify-between gap-4 border-b border-stone-800 px-6 py-4">
             <div>
-              <h2 class="text-lg font-semibold text-stone-50">{source.name}</h2>
-              <p class="mt-1 text-sm text-stone-400">{inspect(source.module)}</p>
+              <h2 class="text-lg font-semibold text-stone-50">{Display.source_name(source)}</h2>
+              <p class="mt-1 text-sm text-stone-400">Collector</p>
             </div>
             <.link
               navigate={source_path(@device.id, source.name)}
@@ -191,7 +191,9 @@ defmodule NerveCenterWeb.DeviceLive do
 
             <div class="rounded-2xl border border-stone-800 bg-stone-950/70 p-4">
               <h3 class="text-xs uppercase tracking-[0.22em] text-stone-400">Current Data</h3>
-              <pre class="mt-3 overflow-x-auto whitespace-pre-wrap text-sm text-stone-200">{pretty(source_snapshot && source_snapshot.data || %{})}</pre>
+              <div class="mt-3">
+                <.data_view source={source} data={(source_snapshot && source_snapshot.data) || %{}} />
+              </div>
             </div>
           </div>
         </article>
@@ -235,6 +237,29 @@ defmodule NerveCenterWeb.DeviceLive do
         <% end %>
       </div>
     </div>
+    """
+  end
+
+  attr :source, :map, required: true
+  attr :data, :map, required: true
+
+  defp data_view(%{source: %{name: :launchd}, data: %{services: services}} = assigns)
+       when is_list(services) do
+    ~H"""
+    <div class="space-y-2">
+      <div :for={service <- @data.services} class="flex items-center justify-between gap-3 text-sm">
+        <span class="truncate text-stone-100">
+          {Map.get(service, :display_name) || service.label}
+        </span>
+        <span class="text-stone-400">{if service.running, do: "running", else: "stopped"}</span>
+      </div>
+    </div>
+    """
+  end
+
+  defp data_view(assigns) do
+    ~H"""
+    <pre class="overflow-x-auto whitespace-pre-wrap text-sm text-stone-200">{pretty(@data)}</pre>
     """
   end
 

@@ -286,7 +286,6 @@ defmodule NerveCenterWeb.DashboardLive do
                 >
                   <div class="min-w-0">
                     <p class="truncate text-sm font-medium text-stone-100">{entity.friendly_name}</p>
-                    <p class="truncate text-xs text-stone-500">{entity.entity_id}</p>
                   </div>
                   <div class="text-right">
                     <p class="text-sm text-stone-100">{entity_state(entity)}</p>
@@ -318,7 +317,7 @@ defmodule NerveCenterWeb.DashboardLive do
                     Display.status_class(source_snapshot.status)
                   ]}
                 >
-                  {source_name}: {source_snapshot.status}
+                  {Display.source_name(source_name)}: {source_snapshot.status}
                 </.link>
                 <span :if={map_size(snapshot.sources) == 0} class="text-sm text-stone-500">
                   Awaiting first successful poll.
@@ -332,7 +331,7 @@ defmodule NerveCenterWeb.DashboardLive do
               </h3>
               <ul class="mt-3 space-y-2 text-sm text-stone-200">
                 <li :for={service <- launchd} class="flex items-center justify-between gap-3">
-                  <span class="truncate">{service.label}</span>
+                  <span class="truncate">{launchd_display_name(service)}</span>
                   <span class={[
                     "rounded-full px-2 py-1 text-xs ring-1",
                     if(service.running,
@@ -384,6 +383,9 @@ defmodule NerveCenterWeb.DashboardLive do
 
   defp entity_state(%{state: state, unit_of_measurement: nil}), do: state
   defp entity_state(%{state: state, unit_of_measurement: unit}), do: "#{state} #{unit}"
+
+  defp launchd_display_name(%{display_name: display_name}), do: display_name
+  defp launchd_display_name(%{label: label}), do: label
 
   defp system_card?(device_id), do: device_id in [:hal9000, :kitt, :rosie, :zoidberg]
 
