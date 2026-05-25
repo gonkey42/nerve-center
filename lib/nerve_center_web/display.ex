@@ -3,6 +3,36 @@ defmodule NerveCenterWeb.Display do
 
   alias NerveCenter.Metrics.Catalog
 
+  @source_names %{
+    frigate: "Frigate",
+    frigate_preview: "Frigate Preview",
+    glances: "Glances",
+    ha_rest_probe: "Home Assistant REST",
+    ha_web_socket: "Home Assistant Stream",
+    immich: "Immich",
+    launchd: "Launch Agents",
+    local_metrics: "Local Metrics",
+    nut: "UPS",
+    pihole: "Pi-hole",
+    plex: "Plex",
+    unifi: "UniFi"
+  }
+
+  def source_name(%{name: source_name}), do: source_name(source_name)
+  def source_name(%{source: source_name}), do: source_name(source_name)
+
+  def source_name(source_name) when is_atom(source_name) do
+    Map.get(@source_names, source_name, humanize(source_name))
+  end
+
+  def source_name(source_name) when is_binary(source_name) do
+    source_name
+    |> String.to_existing_atom()
+    |> source_name()
+  rescue
+    ArgumentError -> humanize(source_name)
+  end
+
   def percent(nil), do: "-"
   def percent(value) when is_number(value), do: "#{Float.round(value * 100, 1)}%"
 
@@ -39,6 +69,14 @@ defmodule NerveCenterWeb.Display do
   def boolean(nil), do: "-"
   def boolean(0), do: "No"
   def boolean(value) when is_number(value) and value > 0, do: "Yes"
+
+  def humanize(value) do
+    value
+    |> to_string()
+    |> String.replace("_", " ")
+    |> String.split(" ", trim: true)
+    |> Enum.map_join(" ", &String.capitalize/1)
+  end
 
   def metric(metric_id, value) do
     case Catalog.definition(metric_id) do

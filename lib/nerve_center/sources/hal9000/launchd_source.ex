@@ -14,15 +14,19 @@ defmodule NerveCenter.Sources.HAL9000.LaunchdSource do
 
   @impl true
   def probe(context) do
-    {:ok, %{labels: context.device.launchd_labels}}
+    {:ok, %{labels: Enum.map(context.device.launchd_labels, &service_label/1)}}
   end
 
   @impl true
   def poll(context) do
     services =
-      Enum.map(context.device.launchd_labels, fn label ->
+      Enum.map(context.device.launchd_labels, fn service ->
+        label = service_label(service)
         {output, _exit_status} = System.cmd("launchctl", ["list", label], stderr_to_stdout: true)
-        parse_service(label, output)
+
+        service
+        |> parse_service(output)
+        |> Map.put(:display_name, service_display_name(service))
       end)
 
     {:ok, %{services: services}}
@@ -40,7 +44,15 @@ defmodule NerveCenter.Sources.HAL9000.LaunchdSource do
      }}
   end
 
-  defp parse_service(label, output) do
+  defp service_label(%{label: label}), do: label
+  defp service_label(label), do: label
+
+  defp service_display_name(%{display_name: display_name}), do: display_name
+  defp service_display_name(label), do: label
+
+  defp parse_service(service, output) do
+    label = service_label(service)
+
     pid =
       case Regex.run(~r/"PID"\s*=\s*(\d+);/, output, capture: :all_but_first) do
         [value] -> String.to_integer(value)

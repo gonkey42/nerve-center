@@ -3,7 +3,7 @@ defmodule NerveCenterWeb.SourcesLive do
 
   alias NerveCenter.Runtime.AppHealth
   alias NerveCenter.Topology
-  alias NerveCenter.Topology
+  alias NerveCenterWeb.Display
 
   @impl true
   def mount(_params, _session, socket) do
@@ -88,7 +88,7 @@ defmodule NerveCenterWeb.SourcesLive do
                     {device_id, source_name}
                   end)
               }>
-                <td class="px-6 py-4 font-medium">{source.device_id}</td>
+                <td class="px-6 py-4 font-medium">{device_label(source.device_id)}</td>
                 <td class="px-6 py-4">
                   <.link
                     navigate={
@@ -96,7 +96,7 @@ defmodule NerveCenterWeb.SourcesLive do
                     }
                     class="text-stone-100 transition hover:text-amber-300"
                   >
-                    {source.source}
+                    {Display.source_name(source)}
                   </.link>
                 </td>
                 <td class="px-6 py-4">
@@ -131,5 +131,11 @@ defmodule NerveCenterWeb.SourcesLive do
       </div>
     </div>
     """
+  end
+
+  defp device_label(device_id) do
+    Topology.get_device!(device_id).label
+  rescue
+    ArgumentError -> Display.humanize(device_id)
   end
 end
