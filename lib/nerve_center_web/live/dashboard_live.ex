@@ -44,9 +44,6 @@ defmodule NerveCenterWeb.DashboardLive do
             <h1 class="text-4xl font-semibold tracking-tight text-stone-50">
               HAL9000 Read-Only Dashboard
             </h1>
-            <p class="max-w-2xl text-sm text-stone-300">
-              Live state for the enabled devices, sourced locally, across the tailnet, and from the LAN gateway without any write actions.
-            </p>
           </div>
           <nav class="flex gap-3 text-sm">
             <.link
