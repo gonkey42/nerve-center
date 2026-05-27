@@ -7,6 +7,13 @@ defmodule NerveCenterWeb.DashboardLiveTest do
   alias NerveCenter.Snapshot.DeviceSnapshot
   alias NerveCenter.Snapshot.SourceSnapshot
 
+  test "dashboard omits explanatory subtitle copy", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/")
+
+    refute html =~
+             "Live state for the enabled devices, sourced locally, across the tailnet, and from the LAN gateway without any write actions."
+  end
+
   test "launchd services render friendly app names", %{conn: conn} do
     now = DateTime.utc_now()
     previous = SnapshotStore.snapshot(:hal9000)
