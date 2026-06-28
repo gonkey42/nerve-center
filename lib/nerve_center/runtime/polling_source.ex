@@ -1,5 +1,13 @@
 defmodule NerveCenter.Runtime.PollingSource do
-  @moduledoc false
+  @moduledoc """
+  Polling sources return normalized payloads with optional semantic status.
+
+  When `normalize/2` returns `{:ok, payload}`, `payload.status` may be
+  `:ok`, `:degraded`, `:error`, `:offline`, `:stale`, or `:unknown`.
+  If absent or nil, runners publish `:ok` to preserve current metric-source behavior.
+  Semantic statuses describe the monitored subject, not source transport health.
+  Any other status value is an invalid callback payload and must not be published.
+  """
 
   @callback required_env() :: [String.t()]
   @callback probe(map()) :: {:ok, map()} | {:error, term()}

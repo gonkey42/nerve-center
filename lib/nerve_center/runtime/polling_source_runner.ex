@@ -13,6 +13,8 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
 
   require Logger
 
+  @allowed_semantic_statuses [:ok, :degraded, :error, :offline, :stale, :unknown]
+
   def child_spec(opts) do
     device = Keyword.fetch!(opts, :device)
     source = Keyword.fetch!(opts, :source)
@@ -57,7 +59,8 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
         metrics: Map.get(source_snapshot, :metrics, %{}),
         data: Map.get(source_snapshot, :data, %{})
       },
-      last_status: Map.get(source_snapshot, :status, :unknown)
+      last_status: Map.get(source_snapshot, :status, :unknown),
+      last_semantic_status: nil
     }
 
     {:ok, state, {:continue, :bootstrap}}
@@ -124,7 +127,8 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     case safe_callback(state, :normalize, fn -> state.module.normalize(raw, context) end) do
       {:ok, payload} ->
         case safe_step(state, :publish_success, fn -> do_handle_success(state, payload) end) do
-          {:ok, new_state} -> new_state
+          {:ok, {:ok, new_state}} -> new_state
+          {:ok, {:error, reason}} -> handle_failure(state, reason)
           {:error, reason} -> handle_failure(state, reason)
         end
 
@@ -171,6 +175,12 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
   end
 
   defp do_handle_success(state, payload) do
+    with {:ok, semantic_status} <- semantic_status(payload) do
+      do_publish_success(state, payload, semantic_status)
+    end
+  end
+
+  defp do_publish_success(state, payload, semantic_status) do
     observed_at = Map.get(payload, :observed_at, DateTime.utc_now())
     normalized_metrics = Catalog.normalize(Map.get(payload, :metrics, []))
     metric_map = Map.new(normalized_metrics, &{&1.metric_id, &1.metric_value})
@@ -203,7 +213,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     source_snapshot = %SourceSnapshot{
       device_id: state.device.id,
       source: state.source.name,
-      status: :ok,
+      status: semantic_status,
       observed_at: observed_at,
       last_ok_at: observed_at,
       last_error_at: nil,
@@ -217,22 +227,34 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     }
 
     AppHealth.record_source_success(state.device.id, state.source.name, observed_at)
-    maybe_log_recovery(state)
+    maybe_log_success(state, semantic_status)
     publish_source_snapshot(state, source_snapshot, observed_at)
     schedule_poll(state.interval_ms)
 
-    %{
-      state
-      | private: Map.get(payload, :private, state.private),
-        last_ok_at: observed_at,
-        consecutive_failures: 0,
-        backoff_ms: 0,
-        last_error_at: nil,
-        ever_ok?: true,
-        last_error: nil,
-        last_payload: %{metrics: metric_map, data: data},
-        last_status: :ok
-    }
+    {:ok,
+     %{
+       state
+       | private: Map.get(payload, :private, state.private),
+         last_ok_at: observed_at,
+         consecutive_failures: 0,
+         backoff_ms: 0,
+         last_error_at: nil,
+         ever_ok?: true,
+         last_error: nil,
+         last_payload: %{metrics: metric_map, data: data},
+         last_status: semantic_status,
+         last_semantic_status: semantic_status
+     }}
+  end
+
+  defp semantic_status(payload) do
+    semantic_status = Map.get(payload, :status) || :ok
+
+    if semantic_status in @allowed_semantic_statuses do
+      {:ok, semantic_status}
+    else
+      {:error, {:invalid_callback_payload, :invalid_semantic_status}}
+    end
   end
 
   defp publish_source_snapshot(state, source_snapshot, emitted_at) do
@@ -400,12 +422,22 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     end
   end
 
-  defp maybe_log_recovery(state) do
-    if state.consecutive_failures > 0 or state.last_status != :ok do
-      Logger.info(
-        "polling source #{state.device.id}/#{state.source.name} recovered after " <>
-          "#{state.consecutive_failures} failures last_error=#{state.last_error || "none"}"
-      )
+  defp maybe_log_success(state, semantic_status) do
+    cond do
+      state.consecutive_failures > 0 ->
+        Logger.info(
+          "polling source #{state.device.id}/#{state.source.name} communication recovered after " <>
+            "#{state.consecutive_failures} failures semantic_status=#{semantic_status} " <>
+            "last_error=#{state.last_error || "none"}"
+        )
+
+      state.last_semantic_status not in [nil, :ok] and semantic_status == :ok ->
+        Logger.info(
+          "polling source #{state.device.id}/#{state.source.name} semantic status recovered to ok"
+        )
+
+      true ->
+        :ok
     end
   end
 
