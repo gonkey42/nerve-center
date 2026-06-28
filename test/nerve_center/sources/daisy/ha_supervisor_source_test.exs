@@ -31,6 +31,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     "Authorization" => "Bearer #{@forbidden_bridge_token}",
     "trace" => "Traceback fake bridge failure"
   }
+  @persistence_writer_flush_interval_ms 1_000
 
   setup do
     previous = System.get_env("DAISY_SUPERVISOR_BRIDGE_TOKEN")
@@ -739,7 +740,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     assert_receive %SourceSnapshotUpdated{source_snapshot: second_snapshot}, 1_000
     assert second_snapshot.status == :error
 
-    wait_until(fn -> count_ha_supervisor_events("ha_supervisor_addon_problem") == 1 end)
+    wait_for_persistence_writer_flush()
 
     events =
       DeviceEvent
@@ -1183,6 +1184,16 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
         event.event_type == ^event_type
     )
     |> Repo.aggregate(:count, :id)
+  end
+
+  defp wait_for_persistence_writer_flush do
+    Process.sleep(@persistence_writer_flush_interval_ms + 100)
+    wait_until(&persistence_writer_queue_empty?/0)
+  end
+
+  defp persistence_writer_queue_empty? do
+    state = :sys.get_state(PersistenceWriter)
+    state.sample_count == 0 and state.event_count == 0 and state.probe_count == 0
   end
 
   defp wait_until(fun, timeout_ms \\ 1_500) do
