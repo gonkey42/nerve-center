@@ -7,13 +7,12 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
   alias NerveCenter.Metrics.Catalog
   alias NerveCenter.Runtime.AppHealth
   alias NerveCenter.Runtime.PersistenceWriter
+  alias NerveCenter.Runtime.SemanticStatus
   alias NerveCenter.Runtime.SnapshotStore
   alias NerveCenter.Snapshot.SourceSnapshot
   alias NerveCenter.Topology
 
   require Logger
-
-  @allowed_semantic_statuses [:ok, :degraded, :error, :offline, :stale, :unknown]
 
   def child_spec(opts) do
     device = Keyword.fetch!(opts, :device)
@@ -175,7 +174,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
   end
 
   defp do_handle_success(state, payload) do
-    with {:ok, semantic_status} <- semantic_status(payload) do
+    with {:ok, semantic_status} <- SemanticStatus.normalize(payload) do
       do_publish_success(state, payload, semantic_status)
     end
   end
@@ -247,27 +246,10 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
      }}
   end
 
-  defp semantic_status(payload) do
-    case Map.fetch(payload, :status) do
-      :error ->
-        {:ok, :ok}
-
-      {:ok, nil} ->
-        {:ok, :ok}
-
-      {:ok, semantic_status} ->
-        if semantic_status in @allowed_semantic_statuses do
-          {:ok, semantic_status}
-        else
-          {:error, {:invalid_callback_payload, :invalid_semantic_status}}
-        end
-    end
-  end
-
   defp stored_successful_semantic_status(source_snapshot) do
     status = Map.get(source_snapshot, :status)
 
-    if status in @allowed_semantic_statuses and is_nil(Map.get(source_snapshot, :last_error)) and
+    if SemanticStatus.valid?(status) and is_nil(Map.get(source_snapshot, :last_error)) and
          is_nil(Map.get(source_snapshot, :last_error_at)) do
       status
     else

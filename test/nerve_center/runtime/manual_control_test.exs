@@ -22,6 +22,7 @@ defmodule NerveCenter.Runtime.ManualControlTest do
   @forbidden_password "fake-password-12345678901234567890"
   @forbidden_authorization "Authorization: Bearer fake-authorization-token-12345678901234567890"
   @forbidden_traceback "Traceback (most recent call last)"
+  @forbidden_sensitive_atom :"Authorization fake-bridge-token-12345678901234567890 fake-password-12345678901234567890 Traceback"
   @forbidden_bridge_body """
   token=#{@forbidden_token}
   password=#{@forbidden_password}
@@ -164,6 +165,26 @@ defmodule NerveCenter.Runtime.ManualControlTest do
       end)
 
     assert_sanitized_everywhere(log)
+  end
+
+  test "refresh_source sanitizes sensitive atom callback errors" do
+    cases = [
+      {{:error, @forbidden_sensitive_atom}, {:manual_refresh_failed, :callback_error}},
+      {{:error, {:request, @forbidden_sensitive_atom}}, {:request, :failed}}
+    ]
+
+    Enum.each(cases, fn {callback_return, expected_error} ->
+      log =
+        capture_log(fn ->
+          with_fake_ha_supervisor_source(callback_return, fn ->
+            assert {:error, ^expected_error} =
+                     ManualControl.refresh_source(:daisy, :ha_supervisor)
+          end)
+        end)
+
+      assert_sanitized(expected_error)
+      assert_sanitized_everywhere(log)
+    end)
   end
 
   test "refresh_source rejects invalid semantic status without publishing it" do

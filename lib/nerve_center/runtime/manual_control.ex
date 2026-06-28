@@ -5,11 +5,23 @@ defmodule NerveCenter.Runtime.ManualControl do
   alias NerveCenter.Metrics.Catalog
   alias NerveCenter.Runtime.AppHealth
   alias NerveCenter.Runtime.PersistenceWriter
+  alias NerveCenter.Runtime.SemanticStatus
   alias NerveCenter.Runtime.SnapshotStore
   alias NerveCenter.Snapshot.SourceSnapshot
   alias NerveCenter.Topology
 
-  @allowed_semantic_statuses [:ok, :degraded, :error, :offline, :stale, :unknown]
+  @safe_request_reasons [
+    :closed,
+    :connrefused,
+    :econnrefused,
+    :econnreset,
+    :ehostunreach,
+    :enetunreach,
+    :nxdomain,
+    :timeout
+  ]
+  @safe_callback_error_atoms [:offline, :timeout, :unavailable]
+  @safe_catch_kinds [:error, :exit, :throw]
 
   def refresh_source(device_id, source_name) do
     device = Topology.get_device!(device_id)
@@ -22,8 +34,9 @@ defmodule NerveCenter.Runtime.ManualControl do
          probed_context <- %{context | probe_data: %{ok: true, data: probe_data}},
          {:ok, raw} <- module.poll(probed_context),
          {:ok, payload} <- module.normalize(raw, probed_context),
-         :ok <- validate_semantic_status(semantic_status(payload)) do
-      {:ok, publish_success(device, source, payload, %{ok: true, data: probe_data})}
+         {:ok, semantic_status} <- SemanticStatus.normalize(payload) do
+      {:ok,
+       publish_success(device, source, payload, semantic_status, %{ok: true, data: probe_data})}
     else
       {:error, reason} -> {:error, sanitize_refresh_error(reason)}
       other -> {:error, sanitize_refresh_error({:invalid_callback_return, other})}
@@ -34,9 +47,8 @@ defmodule NerveCenter.Runtime.ManualControl do
     kind, reason -> {:error, sanitize_refresh_error({:caught, kind, reason})}
   end
 
-  defp publish_success(device, source, payload, probe_data) do
+  defp publish_success(device, source, payload, semantic_status, probe_data) do
     observed_at = observed_at(payload)
-    semantic_status = semantic_status(payload)
     normalized_metrics = Catalog.normalize(Map.get(payload, :metrics, []) || [])
     metric_map = Map.new(normalized_metrics, &{&1.metric_id, &1.metric_value})
     data = data(source, payload)
@@ -157,17 +169,6 @@ defmodule NerveCenter.Runtime.ManualControl do
   defp single_error_addon?(%{required: true, status: :error}), do: true
   defp single_error_addon?(_addon), do: false
 
-  defp semantic_status(payload) do
-    case Map.fetch(payload, :status) do
-      :error -> :ok
-      {:ok, nil} -> :ok
-      {:ok, status} -> status
-    end
-  end
-
-  defp validate_semantic_status(status) when status in @allowed_semantic_statuses, do: :ok
-  defp validate_semantic_status(_status), do: {:error, {:invalid_semantic_status, :unsupported}}
-
   defp sanitize_refresh_error({:auth, status, _body}),
     do: {:auth, status, :manual_refresh_unauthorized}
 
@@ -177,16 +178,27 @@ defmodule NerveCenter.Runtime.ManualControl do
   defp sanitize_refresh_error({:invalid_semantic_status, _}),
     do: {:invalid_callback_payload, :invalid_semantic_status}
 
+  defp sanitize_refresh_error({:invalid_callback_payload, :invalid_semantic_status}),
+    do: {:invalid_callback_payload, :invalid_semantic_status}
+
   defp sanitize_refresh_error({:invalid_callback_return, _}),
     do: {:invalid_callback_payload, :invalid_return}
 
   defp sanitize_refresh_error({:exception, _}), do: {:manual_refresh_failed, :exception}
 
-  defp sanitize_refresh_error({:caught, kind, _}) when is_atom(kind),
+  defp sanitize_refresh_error({:caught, kind, _}) when kind in @safe_catch_kinds,
     do: {:manual_refresh_failed, {:caught, kind}}
 
-  defp sanitize_refresh_error({:request, reason}) when is_atom(reason), do: {:request, reason}
+  defp sanitize_refresh_error({:caught, _kind, _reason}), do: {:manual_refresh_failed, :caught}
+
+  defp sanitize_refresh_error({:request, reason}) when reason in @safe_request_reasons,
+    do: {:request, reason}
+
   defp sanitize_refresh_error({:request, _}), do: {:request, :failed}
-  defp sanitize_refresh_error(reason) when is_atom(reason), do: reason
+  defp sanitize_refresh_error(reason) when reason in @safe_callback_error_atoms, do: reason
+
+  defp sanitize_refresh_error(reason) when is_atom(reason),
+    do: {:manual_refresh_failed, :callback_error}
+
   defp sanitize_refresh_error(_reason), do: {:manual_refresh_failed, :callback_error}
 end
