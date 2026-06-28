@@ -484,6 +484,42 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     assert recovered.private.ha_supervisor_problem_fingerprints == MapSet.new()
   end
 
+  test "normalize sanitizes legacy secret-bearing recovery fingerprints" do
+    legacy_fingerprint =
+      "a0d7b954_nut:required_addon_critical_config_warning:nut_leaked_#{@forbidden_password}_#{@forbidden_bridge_token}_Authorization: Bearer #{@forbidden_bridge_token}_Traceback_#{@forbidden_supervisor_token}"
+
+    private = %{
+      ha_supervisor_problem_fingerprints: MapSet.new([legacy_fingerprint])
+    }
+
+    parent = self()
+
+    log =
+      capture_log(fn ->
+        assert {:ok, payload} = @source.normalize(bridge_payload(), context(nil, private))
+        send(parent, {:payload, payload})
+      end)
+
+    assert_receive {:payload, payload}
+
+    assert [
+             %{
+               event_type: :ha_supervisor_addon_recovered,
+               code: :required_addon_critical_config_warning,
+               fingerprint: fingerprint,
+               message: "Network UPS Tools problem recovered."
+             }
+           ] = payload.events
+
+    assert fingerprint =~ "a0d7b954_nut:required_addon_critical_config_warning:"
+    assert fingerprint != legacy_fingerprint
+
+    for output <- [fingerprint, inspect(payload.events), inspect(payload), log],
+        forbidden <- forbidden_fragments() do
+      refute output =~ forbidden
+    end
+  end
+
   test "normalize emits supervisor unhealthy and recovered events when supervisor problems change" do
     unhealthy =
       normalize!(

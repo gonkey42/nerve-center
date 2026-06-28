@@ -446,7 +446,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
     %{
       event_type: :ha_supervisor_recovered,
       code: fingerprint_code(fingerprint),
-      fingerprint: fingerprint,
+      fingerprint: sanitize(fingerprint),
       message: "Home Assistant Supervisor problem recovered."
     }
   end
@@ -458,7 +458,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
     %{
       event_type: :ha_supervisor_addon_recovered,
       code: fingerprint_code(fingerprint),
-      fingerprint: fingerprint,
+      fingerprint: sanitize(fingerprint),
       message: "#{label} problem recovered."
     }
   end
@@ -550,7 +550,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
 
   defp sanitize(value) when is_binary(value) do
     value
-    |> redact_traceback()
+    |> redact_regex(~r/Traceback/i, "[REDACTED]")
     |> redact_regex(~r/Authorization:\s*Bearer\s+[A-Za-z0-9_-]{20,}/i, "[REDACTED]")
     |> redact_regex(~r/Bearer\s+[A-Za-z0-9_-]{20,}/, "Bearer [REDACTED]")
     |> redact_regex(~r/Authorization/i, "[REDACTED]")
@@ -561,14 +561,6 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
   defp sanitize(value), do: value
 
   defp redact_regex(value, regex, replacement), do: Regex.replace(regex, value, replacement)
-
-  defp redact_traceback(value) do
-    if String.contains?(value, "Traceback") do
-      "[REDACTED]"
-    else
-      value
-    end
-  end
 
   defp sensitive_key?(key) do
     normalized =
