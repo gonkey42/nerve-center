@@ -76,4 +76,19 @@ defmodule NerveCenter.Runtime.FailureReasonTest do
       assert sanitized =~ expected
     end
   end
+
+  test "redacts bearer tokens in binary authorization reasons" do
+    cases = [
+      "Authorization: Bearer #{@opaque_secret}",
+      "authorization: bearer #{@opaque_secret}",
+      "bridge failed Bearer #{@opaque_secret} while polling"
+    ]
+
+    for reason <- cases do
+      sanitized = FailureReason.sanitize(reason)
+
+      refute sanitized =~ @opaque_secret
+      assert sanitized =~ "[REDACTED]"
+    end
+  end
 end
