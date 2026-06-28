@@ -1,0 +1,23 @@
+name: Daisy Supervisor Bridge
+slug: daisy_supervisor_bridge
+version: "0.1.0"
+description: Read-only sanitized Home Assistant Supervisor add-on health for NerveCenter
+arch:
+  - amd64
+startup: system
+hassio_api: true
+hassio_role: default
+init: false
+host_network: false
+ports:
+  9567/tcp: 9567
+ports_description:
+  9567/tcp: Read-only sanitized Supervisor health API for NerveCenter
+options:
+  token: ""
+  watched_addons:
+    - a0d7b954_nut
+schema:
+  token: password
+  watched_addons:
+    - str
