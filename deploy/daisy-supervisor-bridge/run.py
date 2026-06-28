@@ -61,7 +61,7 @@ class SupervisorClient:
             if error.code in (401, 403):
                 raise SupervisorAuthError("Supervisor request unauthorized") from None
             raise SupervisorError("Supervisor request failed") from None
-        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        except (urllib.error.URLError, TimeoutError, OSError, UnicodeDecodeError, json.JSONDecodeError):
             raise SupervisorError("Supervisor request failed") from None
 
         return _require_object(payload)

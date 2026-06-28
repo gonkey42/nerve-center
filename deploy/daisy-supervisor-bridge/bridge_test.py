@@ -320,6 +320,29 @@ class BridgeStartupAndAuthTest(unittest.TestCase):
         body = self.assert_error_response(request, 502, {"error": "supervisor_unavailable"})
         self.assertNotIn(STRONG_TOKEN, body)
 
+    def test_invalid_utf8_supervisor_payload_returns_sanitized_502(self):
+        app = run.BridgeApp(
+            options={"token": STRONG_TOKEN, "watched_addons": ["a0d7b954_nut"]},
+            supervisor=run.SupervisorClient(
+                "supervisor-token",
+                base_url=self.supervisor_response_server(b"\xff"),
+            ),
+        )
+        server, port = run.start_test_server(app)
+        self.addCleanup(server.shutdown)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        request = self.auth_request(port, "/health", authorization=f"Bearer {STRONG_TOKEN}")
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            body = self.assert_error_response(request, 502, {"error": "supervisor_unavailable"})
+
+        output = stdout.getvalue() + stderr.getvalue()
+        self.assertNotIn("Traceback", body)
+        self.assertNotIn("Traceback", output)
+        self.assertNotIn(STRONG_TOKEN, body)
+        self.assertNotIn("supervisor-token", output)
+
     def test_unsupported_methods_authenticate_before_method_handling(self):
         port = self.start_exploding_app()
 
