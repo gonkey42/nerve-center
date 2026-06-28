@@ -27,7 +27,11 @@ defmodule NerveCenter.Runtime.FailureReason do
 
   def sanitize(reason) when is_map(reason) do
     Map.new(reason, fn {key, value} ->
-      {sanitize_key(key), sanitize(value)}
+      if sensitive_key?(key) do
+        {sanitize_key(key), :redacted_sensitive_value}
+      else
+        {sanitize(key), sanitize(value)}
+      end
     end)
   end
 
@@ -73,7 +77,14 @@ defmodule NerveCenter.Runtime.FailureReason do
       |> to_string()
       |> String.downcase()
 
-    normalized in ["authorization", "password", "token", "access_token", "bridge_token"] or
+    normalized in [
+      "authorization",
+      "password",
+      "token",
+      "access_token",
+      "bridge_token",
+      "traceback"
+    ] or
       String.ends_with?(normalized, "_token")
   end
 

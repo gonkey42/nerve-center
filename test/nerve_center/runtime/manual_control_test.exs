@@ -4,17 +4,18 @@ defmodule NerveCenter.Runtime.ManualControlTest do
   import Ecto.Query
   import ExUnit.CaptureLog
 
+  import NerveCenter.TestSupport.PersistenceWriterHelpers,
+    only: [clear_persistence_writer_queues: 0, persistence_writer_queue_empty?: 0]
+
   alias NerveCenter.Messages.SourceSnapshotUpdated
   alias NerveCenter.Persistence.DeviceEvent
   alias NerveCenter.Persistence.SourceProbe
   alias NerveCenter.Repo
   alias NerveCenter.Runtime.AppHealth
-  alias NerveCenter.Runtime.DeviceHub
   alias NerveCenter.Runtime.ManualControl
-  alias NerveCenter.Runtime.PersistenceWriter
   alias NerveCenter.Runtime.SnapshotStore
-  alias NerveCenter.Snapshot.DeviceSnapshot
   alias NerveCenter.Snapshot.SourceSnapshot
+  alias NerveCenter.TestSupport.DaisyRuntimeHelpers
   alias NerveCenter.Topology
 
   @bridge_port 9567
@@ -61,40 +62,22 @@ defmodule NerveCenter.Runtime.ManualControlTest do
     clear_persistence_writer_queues()
     delete_manual_rows()
 
-    previous_snapshot = SnapshotStore.snapshot(:daisy)
-    previous_hub_state = current_hub_state(:daisy)
-    previous_health = AppHealth.source_state(:daisy, :ha_supervisor)
-    suspended_runner = suspend_source_runner(:daisy, :ha_supervisor)
-
     device = Topology.get_device!(:daisy)
 
-    snapshot = %DeviceSnapshot{
-      device_id: :daisy,
-      label: "DAISY",
-      status: :ok,
-      updated_at: DateTime.utc_now(),
-      offline_expected: false,
-      metrics: %{},
-      sources: %{}
-    }
+    snapshot =
+      DaisyRuntimeHelpers.device_snapshot(device, %{
+        status: :ok,
+        updated_at: DateTime.utc_now()
+      })
 
-    seed_app_health(:daisy, :ha_supervisor)
-    SnapshotStore.put(snapshot)
-    seed_device_hub(device, snapshot)
-
-    on_exit(fn ->
-      stop_bridge_server()
-      resume_source_runner(suspended_runner)
-      clear_persistence_writer_queues()
-      delete_manual_rows()
-
-      if previous_snapshot do
-        SnapshotStore.put(previous_snapshot)
+    DaisyRuntimeHelpers.prepare_daisy_runtime(
+      device,
+      snapshot: snapshot,
+      cleanup: fn ->
+        stop_bridge_server()
+        delete_manual_rows()
       end
-
-      restore_device_hub(:daisy, previous_hub_state)
-      restore_app_health(:daisy, :ha_supervisor, previous_health)
-    end)
+    )
 
     :ok
   end
@@ -525,96 +508,6 @@ defmodule NerveCenter.Runtime.ManualControlTest do
     )
   end
 
-  defp seed_device_hub(device, snapshot) do
-    case Registry.lookup(NerveCenter.Runtime.DeviceRegistry, device.id) do
-      [{pid, _value}] ->
-        :sys.replace_state(pid, &%{&1 | snapshot: snapshot})
-
-      [] ->
-        start_supervised!({DeviceHub, device: device})
-    end
-  end
-
-  defp current_hub_state(device_id) do
-    case Registry.lookup(NerveCenter.Runtime.DeviceRegistry, device_id) do
-      [{pid, _value}] -> {:ok, pid, :sys.get_state(pid)}
-      [] -> :missing
-    end
-  end
-
-  defp restore_device_hub(_device_id, {:ok, pid, state}) do
-    if Process.alive?(pid) do
-      :sys.replace_state(pid, fn _current -> state end)
-    end
-  end
-
-  defp restore_device_hub(_device_id, :missing), do: :ok
-
-  defp seed_app_health(device_id, source_name) do
-    source_state = %{
-      device_id: device_id,
-      source: source_name,
-      last_ok_at: nil,
-      consecutive_failures: 0,
-      backoff_ms: 0,
-      last_error_at: nil,
-      last_error: nil
-    }
-
-    restore_app_health(device_id, source_name, source_state)
-  end
-
-  defp restore_app_health(device_id, source_name, source_state) do
-    :sys.replace_state(AppHealth, fn state ->
-      %{state | sources: Map.put(state.sources, {device_id, source_name}, source_state)}
-    end)
-  end
-
-  defp suspend_source_runner(device_id, source_name) do
-    case :global.whereis_name({:device_tree, device_id}) do
-      :undefined ->
-        nil
-
-      tree_pid ->
-        tree_pid
-        |> Supervisor.which_children()
-        |> Enum.find_value(fn
-          {{_module, ^device_id, ^source_name}, pid, _type, _modules} when is_pid(pid) ->
-            :sys.suspend(pid)
-            pid
-
-          _child ->
-            nil
-        end)
-    end
-  catch
-    :exit, _reason -> nil
-  end
-
-  defp resume_source_runner(nil), do: :ok
-
-  defp resume_source_runner(pid) when is_pid(pid) do
-    if Process.alive?(pid) do
-      :sys.resume(pid)
-    end
-  catch
-    :exit, _reason -> :ok
-  end
-
-  defp clear_persistence_writer_queues do
-    :sys.replace_state(PersistenceWriter, fn state ->
-      %{
-        state
-        | samples: [],
-          sample_count: 0,
-          events: [],
-          event_count: 0,
-          probes: [],
-          probe_count: 0
-      }
-    end)
-  end
-
   defp count_probes do
     SourceProbe
     |> where([probe], probe.device_id == "daisy" and probe.source == "ha_supervisor")
@@ -638,11 +531,7 @@ defmodule NerveCenter.Runtime.ManualControlTest do
   end
 
   defp assert_sanitized_persistence do
-    wait_until(fn ->
-      PersistenceWriter
-      |> :sys.get_state()
-      |> then(&(&1.sample_count == 0 and &1.event_count == 0 and &1.probe_count == 0))
-    end)
+    wait_until(&persistence_writer_queue_empty?/0)
 
     rows =
       Repo.all(
