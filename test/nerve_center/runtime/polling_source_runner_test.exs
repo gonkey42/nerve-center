@@ -16,7 +16,6 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
   import NerveCenter.TestSupport.PersistenceWriterHelpers,
     only: [
       clear_persistence_writer_queues: 0,
-      persistence_writer_queue_empty?: 0,
       wait_for_persisted_count: 3,
       wait_for_persistence_writer_drain: 0
     ]
@@ -352,7 +351,13 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
 
     assert_forbidden_absent(AppHealth.source_state(:daisy, :ha_supervisor))
 
-    wait_until(fn -> persisted_probe_count() >= 1 and persistence_writer_queue_empty?() end)
+    wait_for_persisted_count(
+      "source probe daisy/ha_supervisor",
+      &persisted_probe_count/0,
+      1
+    )
+
+    wait_for_persistence_writer_drain()
 
     persisted_rows =
       Repo.all(
