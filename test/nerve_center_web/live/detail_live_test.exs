@@ -184,6 +184,56 @@ defmodule NerveCenterWeb.DetailLiveTest do
     refute html =~ "supervisor-token-should-not-leak"
   end
 
+  test "source detail hides source-normalized key-value secrets and dotted bearer tails", %{
+    conn: conn
+  } do
+    now = DateTime.utc_now()
+    dotted_bearer = "header.payload.sig"
+    opaque_value = "opaque-config-value-98765"
+
+    assert {:ok, normalized} =
+             HASupervisorSource.normalize(
+               bridge_payload(%{
+                 "addons" => [
+                   addon_payload(%{
+                     "name" => "Network UPS Tools Authorization: Bearer #{dotted_bearer}",
+                     "state" => "started password: #{opaque_value}",
+                     "version" => "0.18.0 password=#{opaque_value}",
+                     "version_latest" => "0.19.0 Authorization: Bearer #{dotted_bearer}",
+                     "config_warnings" => [
+                       %{
+                         "severity" => "critical",
+                         "code" => "nut_password_blank",
+                         "message" => "password: #{opaque_value}",
+                         "detail" => "Authorization: Bearer #{dotted_bearer}"
+                       }
+                     ]
+                   })
+                 ]
+               }),
+               ha_supervisor_context()
+             )
+
+    seed_daisy_supervisor(now, normalized.data)
+
+    {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_supervisor")
+
+    assert html =~ "DAISY / HA Supervisor"
+    assert html =~ "Network UPS Tools"
+    assert html =~ "nut_password_blank"
+
+    for forbidden <- [
+          opaque_value,
+          dotted_bearer,
+          "payload.sig",
+          "Authorization",
+          "Bearer header",
+          "password:"
+        ] do
+      refute html =~ forbidden
+    end
+  end
+
   test "source detail renders safe ha supervisor fallback when addons are missing", %{conn: conn} do
     now = DateTime.utc_now()
 

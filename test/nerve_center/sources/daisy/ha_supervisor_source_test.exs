@@ -607,6 +607,58 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     end
   end
 
+  test "normalize redacts key-value secrets and dotted bearer tails while keeping safe warning codes" do
+    dotted_bearer = "header.payload.sig"
+    opaque_value = "opaque-config-value-98765"
+
+    payload =
+      normalize!(
+        bridge_payload(%{
+          "supervisor" =>
+            bridge_payload()["supervisor"]
+            |> Map.put("version", "2026.06.2 password: #{opaque_value}")
+            |> Map.put("version_latest", "Authorization: Bearer #{dotted_bearer}")
+            |> Map.put("channel", "stable token=#{opaque_value}"),
+          "addons" => [
+            addon_payload(%{
+              "name" => "Network UPS Tools Authorization: Bearer #{dotted_bearer}",
+              "state" => "started password: #{opaque_value}",
+              "boot" => "auto token=#{opaque_value}",
+              "startup" => "system Authorization: Bearer #{dotted_bearer}",
+              "version" => "0.18.0 password=#{opaque_value}",
+              "version_latest" => "0.19.0 token: #{opaque_value}",
+              "config_warnings" => [
+                %{
+                  "severity" => "critical",
+                  "code" => "nut_password_blank",
+                  "message" => "password: #{opaque_value}",
+                  "detail" => "Authorization: Bearer #{dotted_bearer}"
+                }
+              ]
+            })
+          ]
+        })
+      )
+
+    rendered = inspect(payload)
+
+    assert rendered =~ "nut_password_blank"
+    assert rendered =~ "Network UPS Tools"
+    assert Enum.any?(payload.events, &(&1.fingerprint =~ "nut_password_blank"))
+
+    for forbidden <- [
+          opaque_value,
+          dotted_bearer,
+          "payload.sig",
+          "Authorization",
+          "Bearer header",
+          "password:",
+          "token="
+        ] do
+      refute rendered =~ forbidden
+    end
+  end
+
   test "normalize emits events only on problem fingerprint changes" do
     first = normalize!(bridge_payload(%{"addons" => [addon_payload(%{"state" => "error"})]}))
 

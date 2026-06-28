@@ -3,6 +3,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
 
   use NerveCenter.Runtime.PollingSource
 
+  alias NerveCenter.Runtime.FailureReason
   alias NerveCenter.Sources.Support
 
   @safe_config_warning_codes ~w(nut_username_blank nut_password_blank nut_port_unmapped)
@@ -626,18 +627,11 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
     {protected, safe_codes} = protect_safe_config_warning_codes(value)
 
     protected
-    |> redact_regex(~r/Traceback/i, "[REDACTED]")
-    |> redact_regex(~r/Authorization:\s*Bearer\s+[A-Za-z0-9_-]{20,}/i, "[REDACTED]")
-    |> redact_regex(~r/Bearer\s+[A-Za-z0-9_-]{20,}/, "Bearer [REDACTED]")
-    |> redact_regex(~r/Authorization/i, "[REDACTED]")
-    |> redact_regex(~r/[A-Za-z0-9_-]*token[A-Za-z0-9_-]*/i, "[REDACTED]")
-    |> redact_regex(~r/[A-Za-z0-9_-]*password[A-Za-z0-9_-]*/i, "[REDACTED]")
+    |> FailureReason.sanitize()
     |> restore_safe_config_warning_codes(safe_codes)
   end
 
   defp sanitize(value), do: value
-
-  defp redact_regex(value, regex, replacement), do: Regex.replace(regex, value, replacement)
 
   defp protect_safe_config_warning_codes(value) do
     Enum.with_index(@safe_config_warning_codes)

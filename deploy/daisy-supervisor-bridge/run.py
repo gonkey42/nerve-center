@@ -13,6 +13,38 @@ import urllib.request
 EXAMPLE_TOKEN = "replace-me-with-a-random-token"
 SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 NETWORK_KEY_PATTERN = re.compile(r"^\d+/(tcp|udp)$")
+SENSITIVE_TEXT_MARKERS = [
+    "auth",
+    "credential",
+    "password",
+    "passwd",
+    "passphrase",
+    "token",
+    "key",
+    "secret",
+    "cookie",
+    "session",
+    "sid",
+    "csrf",
+    "traceback",
+]
+SENSITIVE_KEY_PATTERN = (
+    r"[A-Za-z0-9_-]*(?:"
+    + "|".join(SENSITIVE_TEXT_MARKERS)
+    + r")[A-Za-z0-9_-]*"
+)
+SENSITIVE_QUOTED_KEY_VALUE_PATTERN = re.compile(
+    r"([\"'])("
+    + SENSITIVE_KEY_PATTERN
+    + r")\1(\s*(?:=>|=|:)\s*)([\"'])(?:[^\"']*)\4",
+    re.IGNORECASE,
+)
+SENSITIVE_KEY_VALUE_PATTERN = re.compile(
+    r"\b("
+    + SENSITIVE_KEY_PATTERN
+    + r")\b(\s*(?:=>|=|:)\s*|\s+)(?:\"[^\"]*\"|'[^']*'|[^\s,;&]+)",
+    re.IGNORECASE,
+)
 
 
 class ConfigError(RuntimeError):
@@ -576,15 +608,54 @@ def _unavailable_addon(slug):
 
 def _string_or_none(value):
     if isinstance(value, str):
-        return value
+        return _sanitize_string(value)
     return None
 
 
 def _first_string(*values):
     for value in values:
         if isinstance(value, str) and value != "":
-            return value
+            return _sanitize_string(value)
     return None
+
+
+def _sanitize_string(value):
+    value = re.sub(r"Traceback", "[REDACTED]", value, flags=re.IGNORECASE)
+    value = re.sub(
+        r"Authorization:\s*Bearer\s+[^,\s;]+",
+        "[REDACTED]",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(r"Bearer\s+[^,\s;]+", "Bearer [REDACTED]", value, flags=re.IGNORECASE)
+    value = SENSITIVE_QUOTED_KEY_VALUE_PATTERN.sub(_redact_quoted_sensitive_key_value, value)
+    value = SENSITIVE_KEY_VALUE_PATTERN.sub(_redact_unquoted_sensitive_key_value, value)
+    value = re.sub(r"Authorization", "[REDACTED]", value, flags=re.IGNORECASE)
+    value = re.sub(
+        r"[A-Za-z0-9_-]*token[A-Za-z0-9_-]*",
+        "[REDACTED]",
+        value,
+        flags=re.IGNORECASE,
+    )
+    value = re.sub(
+        r"[A-Za-z0-9_-]*password[A-Za-z0-9_-]*",
+        "[REDACTED]",
+        value,
+        flags=re.IGNORECASE,
+    )
+    return value
+
+
+def _redact_quoted_sensitive_key_value(match):
+    key_quote = match.group(1)
+    key = match.group(2)
+    separator = match.group(3)
+    value_quote = match.group(4)
+    return f"{key_quote}{key}{key_quote}{separator}{value_quote}[REDACTED]{value_quote}"
+
+
+def _redact_unquoted_sensitive_key_value(match):
+    return f"{match.group(1)}{match.group(2)}[REDACTED]"
 
 
 def _first_bool(*values):

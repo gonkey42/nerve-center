@@ -989,6 +989,59 @@ class BridgeHealthPayloadTest(unittest.TestCase):
         self.assertNotIn("secret/tcp", encoded)
         self.assertNotIn("token/tcp", encoded)
 
+    def test_health_payload_redacts_secret_shaped_allowlisted_strings(self):
+        dotted_bearer = "header.payload.sig"
+        opaque_value = "opaque-config-value-98765"
+        detail = self.nut_detail(
+            name=f"Network UPS Tools Authorization: Bearer {dotted_bearer}",
+            state=f"started password: {opaque_value}",
+            version=f"1.0.0 token={opaque_value}",
+            version_latest=f"1.1.0 Authorization: Bearer {dotted_bearer}",
+            boot=f"auto password: {opaque_value}",
+            startup=f"system token={opaque_value}",
+        )
+        supervisor = self.supervisor(
+            supervisor_info=self.supervisor_info(
+                version=f"2026.06.2 Authorization: Bearer {dotted_bearer}",
+                version_latest=f"2026.06.3 token={opaque_value}",
+                channel=f"stable password: {opaque_value}",
+                arch=f"amd64 token={SUPERVISOR_TOKEN_VALUE}",
+            ),
+            details={"a0d7b954_nut": detail},
+        )
+        port = self.start_bridge(supervisor)
+
+        payload, body = self.read_success_payload(
+            self.auth_request(port, "/health", authorization=f"Bearer {STRONG_TOKEN}")
+        )
+
+        encoded = self.assert_redacted_payload(payload)
+        for preserved in [
+            "2026.06.2",
+            "2026.06.3",
+            "stable",
+            "amd64",
+            "Network UPS Tools",
+            "started",
+            "1.0.0",
+            "1.1.0",
+            "auto",
+            "system",
+        ]:
+            self.assertIn(preserved, encoded)
+        for forbidden in [
+            dotted_bearer,
+            "payload.sig",
+            opaque_value,
+            "Authorization",
+            "Bearer header",
+            "password:",
+            "token=",
+            SUPERVISOR_TOKEN_VALUE,
+        ]:
+            self.assertNotIn(forbidden, encoded)
+            self.assertNotIn(forbidden, body)
+
     def test_malformed_supervisor_object_field_types_return_sanitized_502(self):
         for malformed_info in [
             self.supervisor_info(healthy="true"),
