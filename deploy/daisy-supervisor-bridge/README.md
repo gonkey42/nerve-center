@@ -58,7 +58,7 @@ If any endpoint fails, raise only to the least Home Assistant Supervisor role th
 Architecture gate:
 
 ```text
-Observed Daisy add-on architecture: pending
+Observed Daisy add-on architecture: amd64, from read-only `ha info --raw-json` on 2026-06-28; Daisy reported `arch: "amd64"` and `supported_arch: ["amd64"]`.
 Current add-on arch: amd64
 Current BUILD_FROM: ghcr.io/home-assistant/amd64-base:3.21
 ```

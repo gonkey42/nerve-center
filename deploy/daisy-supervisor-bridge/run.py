@@ -12,6 +12,7 @@ import urllib.request
 
 EXAMPLE_TOKEN = "replace-me-with-a-random-token"
 SLUG_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
+NETWORK_KEY_PATTERN = re.compile(r"^\d+/(tcp|udp)$")
 
 
 class ConfigError(RuntimeError):
@@ -153,6 +154,8 @@ def build_health_payload(supervisor, watched_addons):
         overview = addon_overviews.get(slug, {})
         try:
             addon_info = _require_object(supervisor.addon_info(slug))
+        except SupervisorMalformedError:
+            raise
         except SupervisorError:
             addon_payloads.append(_unavailable_addon(slug))
             continue
@@ -167,17 +170,28 @@ def build_health_payload(supervisor, watched_addons):
 
 
 def sanitize_supervisor_info(raw):
+    _validate_supervisor_info(raw)
+
     sanitized = {
-        "healthy": _bool_or_false(raw.get("healthy")),
-        "supported": _bool_or_false(raw.get("supported")),
+        "healthy": raw.get("healthy"),
+        "supported": raw.get("supported"),
         "version": _string_or_none(raw.get("version")),
     }
+    if "version_latest" in raw:
+        sanitized["version_latest"] = _string_or_none(raw.get("version_latest"))
+    if "update_available" in raw:
+        sanitized["update_available"] = raw.get("update_available")
+    if "channel" in raw:
+        sanitized["channel"] = _string_or_none(raw.get("channel"))
     if "arch" in raw:
         sanitized["arch"] = _string_or_none(raw.get("arch"))
     return sanitized
 
 
 def sanitize_addon_info(slug, overview, detail):
+    _validate_addon_info(overview)
+    _validate_addon_info(detail)
+
     addon = {
         "slug": slug,
         "name": _first_string(detail.get("name"), overview.get("name"), slug),
@@ -190,6 +204,30 @@ def sanitize_addon_info(slug, overview, detail):
     version = _first_string(detail.get("version"), overview.get("version"), None)
     if version is not None:
         addon["version"] = version
+
+    version_latest = _first_string(detail.get("version_latest"), overview.get("version_latest"), None)
+    if version_latest is not None:
+        addon["version_latest"] = version_latest
+
+    update_available = _first_optional_bool(detail.get("update_available"), overview.get("update_available"))
+    if update_available is not None:
+        addon["update_available"] = update_available
+
+    boot = _first_string(detail.get("boot"), overview.get("boot"), None)
+    if boot is not None:
+        addon["boot"] = boot
+
+    startup = _first_string(detail.get("startup"), overview.get("startup"), None)
+    if startup is not None:
+        addon["startup"] = startup
+
+    protected = _first_optional_bool(detail.get("protected"), overview.get("protected"))
+    if protected is not None:
+        addon["protected"] = protected
+
+    network = _network_or_empty(detail.get("network"))
+    if network:
+        addon["network"] = network
 
     if slug == "a0d7b954_nut":
         config_summary, config_warnings = sanitize_nut_config(
@@ -446,6 +484,48 @@ def _addon_overviews_by_slug(payload):
     return by_slug
 
 
+def _validate_supervisor_info(raw):
+    _require_bool_field(raw, "healthy", required=True)
+    _require_bool_field(raw, "supported", required=True)
+    _require_string_field(raw, "version")
+    _require_string_field(raw, "version_latest")
+    _require_bool_field(raw, "update_available")
+    _require_string_field(raw, "channel")
+    _require_string_field(raw, "arch")
+
+
+def _validate_addon_info(raw):
+    _require_string_field(raw, "slug")
+    _require_string_field(raw, "name")
+    _require_string_field(raw, "state")
+    _require_string_field(raw, "version")
+    _require_string_field(raw, "version_latest")
+    _require_string_field(raw, "boot")
+    _require_string_field(raw, "startup")
+    _require_bool_field(raw, "available")
+    _require_bool_field(raw, "update_available")
+    _require_bool_field(raw, "protected")
+    _require_object_field(raw, "network")
+    _require_object_field(raw, "options")
+
+
+def _require_string_field(raw, field):
+    if field in raw and raw[field] is not None and not isinstance(raw[field], str):
+        raise SupervisorMalformedError("Supervisor response malformed")
+
+
+def _require_bool_field(raw, field, required=False):
+    if required and field not in raw:
+        raise SupervisorMalformedError("Supervisor response malformed")
+    if field in raw and not isinstance(raw[field], bool):
+        raise SupervisorMalformedError("Supervisor response malformed")
+
+
+def _require_object_field(raw, field):
+    if field in raw and raw[field] is not None and not isinstance(raw[field], dict):
+        raise SupervisorMalformedError("Supervisor response malformed")
+
+
 def _unavailable_addon(slug):
     return {
         "slug": slug,
@@ -483,16 +563,17 @@ def _first_bool(*values):
     return False
 
 
+def _first_optional_bool(*values):
+    for value in values:
+        if isinstance(value, bool):
+            return value
+    return None
+
+
 def _bool_or_none(value):
     if isinstance(value, bool):
         return value
     return None
-
-
-def _bool_or_false(value):
-    if isinstance(value, bool):
-        return value
-    return False
 
 
 def _non_empty_string(value):
@@ -521,6 +602,21 @@ def _network_port_mapped(network, port):
         if value not in (None, False, ""):
             return True
     return False
+
+
+def _network_or_empty(network):
+    if network is None:
+        return {}
+    if not isinstance(network, dict):
+        raise SupervisorMalformedError("Supervisor response malformed")
+
+    sanitized = {}
+    for key, value in network.items():
+        if not isinstance(key, str) or not NETWORK_KEY_PATTERN.fullmatch(key):
+            continue
+        if value is None or (isinstance(value, int) and not isinstance(value, bool)):
+            sanitized[key] = value
+    return sanitized
 
 
 def _utc_now():

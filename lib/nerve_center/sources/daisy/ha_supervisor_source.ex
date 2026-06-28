@@ -5,6 +5,8 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
 
   alias NerveCenter.Sources.Support
 
+  @safe_config_warning_codes ~w(nut_username_blank nut_password_blank nut_port_unmapped)
+
   @impl true
   def required_env, do: ["DAISY_SUPERVISOR_BRIDGE_TOKEN"]
 
@@ -343,8 +345,42 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
     end)
   end
 
-  defp normalize_warnings(warnings) when is_list(warnings), do: Enum.map(warnings, &sanitize/1)
+  defp normalize_warnings(warnings) when is_list(warnings) do
+    Enum.map(warnings, &sanitize_warning/1)
+  end
+
   defp normalize_warnings(_warnings), do: []
+
+  defp sanitize_warning(%{} = warning) do
+    sanitized = sanitize(warning)
+
+    case safe_config_warning_code(value(warning, :code)) do
+      nil -> sanitized
+      code -> put_warning_code(sanitized, warning, code)
+    end
+  end
+
+  defp sanitize_warning(warning), do: sanitize(warning)
+
+  defp safe_config_warning_code(code) when is_atom(code) do
+    code
+    |> Atom.to_string()
+    |> safe_config_warning_code()
+  end
+
+  defp safe_config_warning_code(code) when is_binary(code) do
+    if code in @safe_config_warning_codes, do: code, else: nil
+  end
+
+  defp safe_config_warning_code(_code), do: nil
+
+  defp put_warning_code(sanitized, original, code) do
+    cond do
+      Map.has_key?(original, "code") -> Map.put(sanitized, "code", code)
+      Map.has_key?(original, :code) -> Map.put(sanitized, :code, code)
+      true -> sanitized
+    end
+  end
 
   defp critical_warning?(warning) do
     value(warning, :critical) == true or
@@ -587,18 +623,39 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
   defp sanitize(value) when is_list(value), do: Enum.map(value, &sanitize/1)
 
   defp sanitize(value) when is_binary(value) do
-    value
+    {protected, safe_codes} = protect_safe_config_warning_codes(value)
+
+    protected
     |> redact_regex(~r/Traceback/i, "[REDACTED]")
     |> redact_regex(~r/Authorization:\s*Bearer\s+[A-Za-z0-9_-]{20,}/i, "[REDACTED]")
     |> redact_regex(~r/Bearer\s+[A-Za-z0-9_-]{20,}/, "Bearer [REDACTED]")
     |> redact_regex(~r/Authorization/i, "[REDACTED]")
     |> redact_regex(~r/[A-Za-z0-9_-]*token[A-Za-z0-9_-]*/i, "[REDACTED]")
     |> redact_regex(~r/[A-Za-z0-9_-]*password[A-Za-z0-9_-]*/i, "[REDACTED]")
+    |> restore_safe_config_warning_codes(safe_codes)
   end
 
   defp sanitize(value), do: value
 
   defp redact_regex(value, regex, replacement), do: Regex.replace(regex, value, replacement)
+
+  defp protect_safe_config_warning_codes(value) do
+    Enum.with_index(@safe_config_warning_codes)
+    |> Enum.reduce({value, []}, fn {code, index}, {protected, replacements} ->
+      placeholder = "__NC_SAFE_CONFIG_WARNING_CODE_#{index}__"
+
+      {
+        String.replace(protected, code, placeholder),
+        [{placeholder, code} | replacements]
+      }
+    end)
+  end
+
+  defp restore_safe_config_warning_codes(value, replacements) do
+    Enum.reduce(replacements, value, fn {placeholder, code}, restored ->
+      String.replace(restored, placeholder, code)
+    end)
+  end
 
   defp sensitive_key?(key) do
     normalized =

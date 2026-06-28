@@ -307,6 +307,57 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     assert has_problem?(payload, "a0d7b954_nut", :required_addon_critical_config_warning)
   end
 
+  test "normalize preserves safe nut password warning code while redacting raw password values" do
+    payload =
+      normalize!(
+        bridge_payload(%{
+          "addons" => [
+            addon_payload(%{
+              "config_summary" => %{
+                "password" => @forbidden_password,
+                "password_set" => false
+              },
+              "config_warnings" => [
+                %{
+                  "severity" => "critical",
+                  "code" => "nut_password_blank",
+                  "message" => "NUT user password is blank.",
+                  "detail" => @forbidden_password
+                }
+              ]
+            })
+          ]
+        })
+      )
+
+    addon = addon(payload, "a0d7b954_nut")
+
+    assert [%{"code" => "nut_password_blank"}] =
+             Enum.map(addon.config_warnings, &Map.take(&1, ["code"]))
+
+    assert [%{value: "nut_password_blank"}] =
+             Enum.filter(addon.problems, &(&1.code == :required_addon_critical_config_warning))
+
+    assert payload.events == [
+             %{
+               event_type: :ha_supervisor_addon_problem,
+               code: :required_addon_critical_config_warning,
+               fingerprint:
+                 "a0d7b954_nut:required_addon_critical_config_warning:nut_password_blank",
+               message: "Network UPS Tools problem: required_addon_critical_config_warning."
+             }
+           ]
+
+    assert payload.private.ha_supervisor_problem_fingerprints ==
+             MapSet.new([
+               "a0d7b954_nut:required_addon_critical_config_warning:nut_password_blank"
+             ])
+
+    rendered = inspect(payload)
+    assert rendered =~ "nut_password_blank"
+    refute rendered =~ @forbidden_password
+  end
+
   test "normalize maps optional critical config warning to degraded" do
     optional = [addon_config(%{required: false})]
 

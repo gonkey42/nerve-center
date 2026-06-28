@@ -308,19 +308,16 @@ class BridgeStartupAndAuthTest(unittest.TestCase):
                 ["a0d7b954_nut"],
             )
 
-        payload = run.build_health_payload(
-            ShapedSupervisor(
-                supervisor_info={"version": "2026.06.2", "healthy": True, "supported": True},
-                addon_info=["not", "an", "object"],
-            ),
-            ["a0d7b954_nut"],
-        )
-        self.assertEqual(payload["addons"][0]["slug"], "a0d7b954_nut")
-        self.assertEqual(payload["addons"][0]["state"], "unknown")
-        self.assertEqual(payload["addons"][0]["available"], False)
-        self.assertEqual(payload["addons"][0]["bridge_warnings"][0]["code"], "addon_info_unavailable")
+        with self.assertRaises(run.SupervisorError):
+            run.build_health_payload(
+                ShapedSupervisor(
+                    supervisor_info={"version": "2026.06.2", "healthy": True, "supported": True},
+                    addon_info=["not", "an", "object"],
+                ),
+                ["a0d7b954_nut"],
+            )
 
-    def test_malformed_addon_payload_returns_sanitized_200_unknown(self):
+    def test_malformed_addon_payload_returns_sanitized_502(self):
         app = run.BridgeApp(
             options={"token": STRONG_TOKEN, "watched_addons": ["a0d7b954_nut"]},
             supervisor=ShapedSupervisor(
@@ -335,15 +332,10 @@ class BridgeStartupAndAuthTest(unittest.TestCase):
 
         request = self.auth_request(port, "/health", authorization=f"Bearer {STRONG_TOKEN}")
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-            with urllib.request.urlopen(request, timeout=2) as response:
-                self.assertEqual(response.status, 200)
-                body = response.read().decode("utf-8")
-        payload = json.loads(body)
-        self.assertEqual(payload["addons"][0]["slug"], "a0d7b954_nut")
-        self.assertEqual(payload["addons"][0]["state"], "unknown")
-        self.assertEqual(payload["addons"][0]["available"], False)
-        self.assertEqual(payload["addons"][0]["bridge_warnings"][0]["code"], "addon_info_unavailable")
+            body = self.assert_error_response(request, 502, {"error": "supervisor_unavailable"})
+        output = stdout.getvalue() + stderr.getvalue()
         self.assertNotIn(STRONG_TOKEN, body)
+        self.assertNotIn(SENSITIVE_VALUE, body + output)
 
     def test_invalid_utf8_supervisor_payload_returns_sanitized_502(self):
         app = run.BridgeApp(
@@ -709,13 +701,18 @@ class BridgeHealthPayloadTest(unittest.TestCase):
             ],
         }
 
-    def nut_detail(self, options=None, network=None):
-        return {
+    def nut_detail(self, options=None, network=None, **overrides):
+        detail = {
             "slug": "a0d7b954_nut",
             "name": "Network UPS Tools",
             "state": "started",
             "available": True,
             "version": "1.0.0",
+            "version_latest": "1.1.0",
+            "update_available": True,
+            "boot": "auto",
+            "startup": "system",
+            "protected": True,
             "options": options if options is not None else self.raw_nut_options(),
             "network": {"3493/tcp": 3493} if network is None else network,
             "password": SENSITIVE_VALUE,
@@ -725,6 +722,8 @@ class BridgeHealthPayloadTest(unittest.TestCase):
             "log": "secret log body",
             "secrets": {"token": SUPERVISOR_TOKEN_VALUE},
         }
+        detail.update(overrides)
+        return detail
 
     def overview(self, slug="a0d7b954_nut", **overrides):
         overview = {
@@ -733,6 +732,11 @@ class BridgeHealthPayloadTest(unittest.TestCase):
             "state": "started",
             "available": True,
             "version": "1.0.0",
+            "version_latest": "1.1.0",
+            "update_available": True,
+            "boot": "auto",
+            "startup": "system",
+            "protected": True,
             "options": {"password": SENSITIVE_VALUE},
             "password": SENSITIVE_VALUE,
             "SUPERVISOR_TOKEN": SUPERVISOR_TOKEN_VALUE,
@@ -801,6 +805,20 @@ class BridgeHealthPayloadTest(unittest.TestCase):
         server, port = run.start_test_server(app)
         self.addCleanup(server.shutdown)
         return port
+
+    def assert_sanitized_502_for_supervisor(self, supervisor):
+        port = self.start_bridge(supervisor)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        request = self.auth_request(port, "/health", authorization=f"Bearer {STRONG_TOKEN}")
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            body = self.read_http_error(request, 502, {"error": "supervisor_unavailable"})
+
+        output = stdout.getvalue() + stderr.getvalue()
+        self.assertEqual(body, '{"error":"supervisor_unavailable"}')
+        self.assert_failure_is_redacted(body, output)
+        return output
 
     def assert_redacted_payload(self, payload):
         encoded = json.dumps(payload, sort_keys=True)
@@ -930,6 +948,62 @@ class BridgeHealthPayloadTest(unittest.TestCase):
         )
         self.assert_redacted_payload(payload)
 
+    def test_valid_addon_info_includes_allowlisted_non_secret_fields(self):
+        detail = self.nut_detail(
+            network={
+                "3493/tcp": 3493,
+                "secret/tcp": SENSITIVE_VALUE,
+                "token/tcp": SUPERVISOR_TOKEN_VALUE,
+            }
+        )
+        payload = run.build_health_payload(
+            self.supervisor(details={"a0d7b954_nut": detail}),
+            ["a0d7b954_nut"],
+        )
+
+        addon = payload["addons"][0]
+        self.assertEqual(addon["version"], "1.0.0")
+        self.assertEqual(addon["version_latest"], "1.1.0")
+        self.assertEqual(addon["update_available"], True)
+        self.assertEqual(addon["boot"], "auto")
+        self.assertEqual(addon["startup"], "system")
+        self.assertEqual(addon["protected"], True)
+        self.assertEqual(addon["network"], {"3493/tcp": 3493})
+        encoded = self.assert_redacted_payload(payload)
+        self.assertNotIn("secret/tcp", encoded)
+        self.assertNotIn("token/tcp", encoded)
+
+    def test_malformed_supervisor_object_field_types_return_sanitized_502(self):
+        for malformed_info in [
+            self.supervisor_info(healthy="true"),
+            self.supervisor_info(supported="false"),
+            self.supervisor_info(version={"password": SENSITIVE_VALUE}),
+            self.supervisor_info(arch=["amd64"]),
+        ]:
+            with self.subTest(malformed_info=malformed_info):
+                self.assert_sanitized_502_for_supervisor(
+                    self.supervisor(supervisor_info=malformed_info)
+                )
+
+    def test_malformed_addon_info_object_field_types_return_sanitized_502(self):
+        malformed_details = [
+            self.nut_detail(state={"password": SENSITIVE_VALUE}),
+            self.nut_detail(available="true"),
+            self.nut_detail(version={"password": SENSITIVE_VALUE}),
+            self.nut_detail(version_latest=["1.1.0"]),
+            self.nut_detail(update_available="true"),
+            self.nut_detail(boot={"password": SENSITIVE_VALUE}),
+            self.nut_detail(startup=["system"]),
+            self.nut_detail(protected="true"),
+            self.nut_detail(network=["3493/tcp"]),
+        ]
+
+        for detail in malformed_details:
+            with self.subTest(detail=detail):
+                self.assert_sanitized_502_for_supervisor(
+                    self.supervisor(details={"a0d7b954_nut": detail})
+                )
+
     def test_nut_options_are_summarized_without_password_values(self):
         payload = run.build_health_payload(self.supervisor(), ["a0d7b954_nut"])
         addon = payload["addons"][0]
@@ -940,7 +1014,7 @@ class BridgeHealthPayloadTest(unittest.TestCase):
         self.assertIn('"username_set"', encoded)
         self.assertIn('"password_set"', encoded)
 
-    def test_allowlisted_scalars_do_not_stringify_nested_secret_objects(self):
+    def test_malformed_allowlisted_scalar_objects_return_sanitized_502(self):
         nested_secret = {
             "password": SENSITIVE_VALUE,
             "SUPERVISOR_TOKEN": SUPERVISOR_TOKEN_VALUE,
@@ -955,7 +1029,7 @@ class BridgeHealthPayloadTest(unittest.TestCase):
             }
         )
         detail["version"] = nested_secret
-        payload = run.build_health_payload(
+        self.assert_sanitized_502_for_supervisor(
             self.supervisor(
                 supervisor_info=self.supervisor_info(
                     version=nested_secret,
@@ -965,18 +1039,8 @@ class BridgeHealthPayloadTest(unittest.TestCase):
                 ),
                 addons={"addons": [self.overview(version=nested_secret)]},
                 details={"a0d7b954_nut": detail},
-            ),
-            ["a0d7b954_nut"],
+            )
         )
-
-        self.assertEqual(payload["supervisor"]["version"], None)
-        self.assertEqual(payload["supervisor"]["healthy"], False)
-        self.assertEqual(payload["supervisor"]["supported"], False)
-        self.assertEqual(payload["supervisor"]["arch"], None)
-        self.assertNotIn("version", payload["addons"][0])
-        self.assertEqual(payload["addons"][0]["config_summary"]["mode"], None)
-        self.assertEqual(payload["addons"][0]["config_summary"]["shutdown_host"], None)
-        self.assert_redacted_payload(payload)
 
     def test_default_deny_omits_config_summary_for_unknown_addon(self):
         detail = {
@@ -1117,20 +1181,16 @@ class BridgeHealthPayloadTest(unittest.TestCase):
         )
         self.assert_redacted_payload(payload)
 
-    def test_malformed_addon_detail_keeps_200_shape_with_unknown_state(self):
-        payload = run.build_health_payload(
+    def test_malformed_addon_detail_returns_sanitized_502(self):
+        self.assert_sanitized_502_for_supervisor(
             self.supervisor(
                 detail_errors={
                     "a0d7b954_nut": run.SupervisorMalformedError(
                         f"malformed {SENSITIVE_VALUE} Authorization {SUPERVISOR_TOKEN_VALUE}"
                     )
                 }
-            ),
-            ["a0d7b954_nut"],
+            )
         )
-
-        self.assert_unavailable_addon(payload["addons"][0])
-        self.assert_redacted_payload(payload)
 
     def test_supervisor_auth_failure_returns_generic_502_body(self):
         self.assert_supervisor_client_failure(
@@ -1366,8 +1426,8 @@ class BridgeHealthPayloadTest(unittest.TestCase):
             "Supervisor API unavailable",
         )
 
-    def test_addon_info_invalid_json_returns_200_unknown_without_leaks(self):
-        self.assert_supervisor_client_detail_degrades(
+    def test_addon_info_invalid_json_returns_generic_502_without_leaks(self):
+        self.assert_supervisor_client_failure(
             {
                 "/supervisor/info": (
                     200,
@@ -1382,10 +1442,11 @@ class BridgeHealthPayloadTest(unittest.TestCase):
                     b'{"token":"supervisor-token-should-not-leak","password":"raw-nut-password-should-not-leak"',
                 ),
             },
+            "Supervisor API unavailable",
         )
 
-    def test_addon_info_unexpected_shape_returns_200_unknown_without_leaks(self):
-        self.assert_supervisor_client_detail_degrades(
+    def test_addon_info_unexpected_shape_returns_generic_502_without_leaks(self):
+        self.assert_supervisor_client_failure(
             {
                 "/supervisor/info": (
                     200,
@@ -1400,6 +1461,7 @@ class BridgeHealthPayloadTest(unittest.TestCase):
                     b'["supervisor-token-should-not-leak","raw-nut-password-should-not-leak"]',
                 ),
             },
+            "Supervisor API unavailable",
         )
 
 

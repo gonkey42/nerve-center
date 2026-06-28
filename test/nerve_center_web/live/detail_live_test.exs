@@ -147,6 +147,43 @@ defmodule NerveCenterWeb.DetailLiveTest do
     refute html =~ "supervisor-token-should-not-leak"
   end
 
+  test "source detail renders source-normalized safe nut password warning code", %{conn: conn} do
+    now = DateTime.utc_now()
+
+    assert {:ok, normalized} =
+             HASupervisorSource.normalize(
+               bridge_payload(%{
+                 "addons" => [
+                   addon_payload(%{
+                     "config_summary" => %{
+                       "password" => "raw-nut-password-should-not-leak",
+                       "password_set" => false
+                     },
+                     "config_warnings" => [
+                       %{
+                         "severity" => "critical",
+                         "code" => "nut_password_blank",
+                         "message" => "NUT user password is blank.",
+                         "detail" => "raw-nut-password-should-not-leak"
+                       }
+                     ]
+                   })
+                 ]
+               }),
+               ha_supervisor_context()
+             )
+
+    seed_daisy_supervisor(now, normalized.data)
+
+    {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_supervisor")
+
+    assert html =~ "DAISY / HA Supervisor"
+    assert html =~ "Network UPS Tools"
+    assert html =~ "nut_password_blank"
+    refute html =~ "raw-nut-password-should-not-leak"
+    refute html =~ "supervisor-token-should-not-leak"
+  end
+
   test "source detail renders safe ha supervisor fallback when addons are missing", %{conn: conn} do
     now = DateTime.utc_now()
 
@@ -368,6 +405,60 @@ defmodule NerveCenterWeb.DetailLiveTest do
         }
       }
     })
+  end
+
+  defp bridge_payload(overrides) do
+    Map.merge(
+      %{
+        "observed_at" => "2026-06-28T13:03:42Z",
+        "supervisor" => %{
+          "version" => "2026.06.2",
+          "version_latest" => "2026.06.2",
+          "update_available" => false,
+          "healthy" => true,
+          "supported" => true,
+          "channel" => "stable"
+        },
+        "addons" => [addon_payload(%{})]
+      },
+      overrides
+    )
+  end
+
+  defp addon_payload(overrides) do
+    Map.merge(
+      %{
+        "slug" => "a0d7b954_nut",
+        "name" => "Network UPS Tools",
+        "state" => "started",
+        "version" => "0.18.0",
+        "version_latest" => "0.18.0",
+        "update_available" => false,
+        "available" => true,
+        "boot" => "auto",
+        "startup" => "system",
+        "protected" => true,
+        "network" => %{"3493/tcp" => 3493},
+        "config_summary" => %{
+          "mode" => "netserver",
+          "shutdown_host" => false,
+          "device_count" => 1,
+          "users" => [
+            %{"username_set" => true, "password_set" => true, "upsmon" => "primary"}
+          ]
+        },
+        "config_warnings" => []
+      },
+      overrides
+    )
+  end
+
+  defp ha_supervisor_context do
+    %{
+      device: Topology.get_device!(:daisy),
+      source: Topology.get_source!(:daisy, :ha_supervisor),
+      private: %{}
+    }
   end
 
   defp daisy_device(port) do
