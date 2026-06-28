@@ -2,31 +2,31 @@ defmodule NerveCenterWeb.DetailLiveTest do
   use NerveCenterWeb.ConnCase, async: false
 
   import ExUnit.CaptureLog
+
+  import NerveCenter.TestSupport.DaisySupervisorBridgeHelpers,
+    only: [
+      assert_forbidden_absent: 1,
+      bridge_token: 0,
+      forbidden_body: 0,
+      listen_socket: 0,
+      send_response: 2,
+      serve_requests: 3
+    ]
+
+  import NerveCenter.TestSupport.PersistenceWriterHelpers,
+    only: [clear_persistence_writer_queues: 0]
+
   import Phoenix.LiveViewTest
 
   alias NerveCenter.Messages.SourceSnapshotUpdated
   alias NerveCenter.Runtime.AppHealth
   alias NerveCenter.Runtime.DeviceHub
-  alias NerveCenter.Runtime.PersistenceWriter
   alias NerveCenter.Runtime.PollingSourceRunner
   alias NerveCenter.Runtime.SnapshotStore
   alias NerveCenter.Snapshot.DeviceSnapshot
   alias NerveCenter.Snapshot.SourceSnapshot
   alias NerveCenter.Sources.Daisy.HASupervisorSource
   alias NerveCenter.Topology
-
-  @bridge_token "test-daisy-supervisor-bridge-token-123456"
-  @forbidden_bridge_token "bridge-token-123456789012345678901234"
-  @forbidden_supervisor_token "supervisor-token-should-not-leak"
-  @forbidden_password "raw-nut-password-should-not-leak"
-  @forbidden_body %{
-    "error" => "Unauthorized",
-    "token" => @forbidden_bridge_token,
-    "supervisor_token" => @forbidden_supervisor_token,
-    "password" => @forbidden_password,
-    "Authorization" => "Bearer #{@forbidden_bridge_token}",
-    "trace" => "Traceback fake bridge failure"
-  }
 
   test "device detail renders for phase 1 devices", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/devices/hal9000")
@@ -240,7 +240,7 @@ defmodule NerveCenterWeb.DetailLiveTest do
 
     server =
       serve_requests(listener, 1, fn socket, _request ->
-        send_response(socket, {401, @forbidden_body})
+        send_response(socket, {401, forbidden_body()})
       end)
 
     device = daisy_device(port)
@@ -486,7 +486,7 @@ defmodule NerveCenterWeb.DetailLiveTest do
 
   defp set_bridge_token do
     previous = System.get_env("DAISY_SUPERVISOR_BRIDGE_TOKEN")
-    System.put_env("DAISY_SUPERVISOR_BRIDGE_TOKEN", @bridge_token)
+    System.put_env("DAISY_SUPERVISOR_BRIDGE_TOKEN", bridge_token())
 
     on_exit(fn ->
       if is_nil(previous) do
@@ -496,98 +496,6 @@ defmodule NerveCenterWeb.DetailLiveTest do
       end
     end)
   end
-
-  defp clear_persistence_writer_queues do
-    :sys.replace_state(PersistenceWriter, fn state ->
-      %{
-        state
-        | samples: [],
-          sample_count: 0,
-          events: [],
-          event_count: 0,
-          probes: [],
-          probe_count: 0
-      }
-    end)
-  end
-
-  defp assert_forbidden_absent(term) do
-    encoded = inspect(term, limit: :infinity, printable_limit: :infinity)
-
-    for forbidden <- [
-          @forbidden_bridge_token,
-          @forbidden_supervisor_token,
-          @forbidden_password,
-          "Authorization",
-          "Traceback"
-        ] do
-      refute encoded =~ forbidden
-    end
-  end
-
-  defp listen_socket do
-    {:ok, listener} =
-      :gen_tcp.listen(0, [
-        :binary,
-        active: false,
-        packet: :raw,
-        reuseaddr: true,
-        ip: {127, 0, 0, 1}
-      ])
-
-    {:ok, {{127, 0, 0, 1}, port}} = :inet.sockname(listener)
-    {listener, port}
-  end
-
-  defp serve_requests(listener, count, handler) do
-    Task.async(fn ->
-      try do
-        Enum.each(1..count, fn _index ->
-          {:ok, socket} = :gen_tcp.accept(listener)
-          request = recv_http_request(socket)
-          handler.(socket, request)
-          :ok = :gen_tcp.close(socket)
-        end)
-      after
-        :gen_tcp.close(listener)
-      end
-    end)
-  end
-
-  defp recv_http_request(socket), do: recv_http_request(socket, "")
-
-  defp recv_http_request(socket, acc) do
-    case :gen_tcp.recv(socket, 0, 1_000) do
-      {:ok, chunk} ->
-        request = acc <> chunk
-
-        if String.contains?(request, "\r\n\r\n") do
-          request
-        else
-          recv_http_request(socket, request)
-        end
-
-      {:error, reason} ->
-        flunk("failed to receive HTTP request: #{inspect(reason)}")
-    end
-  end
-
-  defp send_response(socket, {status, body}) do
-    payload = Jason.encode!(body)
-
-    :ok =
-      :gen_tcp.send(socket, [
-        "HTTP/1.1 #{status} #{reason_phrase(status)}\r\n",
-        "content-type: application/json\r\n",
-        "content-length: #{byte_size(payload)}\r\n",
-        "connection: close\r\n",
-        "\r\n",
-        payload
-      ])
-  end
-
-  defp reason_phrase(401), do: "Unauthorized"
-  defp reason_phrase(_status), do: "Error"
 
   defp wait_until(fun, timeout_ms \\ 1_500) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms

@@ -3,12 +3,17 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
 
   import ExUnit.CaptureLog
 
+  import NerveCenter.TestSupport.DaisySupervisorBridgeHelpers,
+    only: [listen_socket: 0, send_response: 2, serve_requests: 3]
+
+  import NerveCenter.TestSupport.PersistenceWriterHelpers,
+    only: [clear_persistence_writer_queues: 0, wait_for_persistence_writer_drain: 0]
+
   alias NerveCenter.Messages.SourceSnapshotUpdated
   alias NerveCenter.Persistence.DeviceEvent
   alias NerveCenter.Repo
   alias NerveCenter.Runtime.AppHealth
   alias NerveCenter.Runtime.DeviceHub
-  alias NerveCenter.Runtime.PersistenceWriter
   alias NerveCenter.Runtime.PollingSourceRunner
   alias NerveCenter.Runtime.SnapshotStore
   alias NerveCenter.Snapshot.DeviceSnapshot
@@ -31,7 +36,6 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     "Authorization" => "Bearer #{@forbidden_bridge_token}",
     "trace" => "Traceback fake bridge failure"
   }
-  @persistence_writer_flush_interval_ms 1_000
 
   setup do
     previous = System.get_env("DAISY_SUPERVISOR_BRIDGE_TOKEN")
@@ -740,7 +744,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     assert_receive %SourceSnapshotUpdated{source_snapshot: second_snapshot}, 1_000
     assert second_snapshot.status == :error
 
-    wait_for_persistence_writer_flush()
+    wait_for_persistence_writer_drain()
 
     events =
       DeviceEvent
@@ -970,74 +974,6 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     ]
   end
 
-  defp listen_socket do
-    {:ok, listener} =
-      :gen_tcp.listen(0, [
-        :binary,
-        active: false,
-        packet: :raw,
-        reuseaddr: true,
-        ip: {127, 0, 0, 1}
-      ])
-
-    {:ok, {{127, 0, 0, 1}, port}} = :inet.sockname(listener)
-    {listener, port}
-  end
-
-  defp serve_requests(listener, count, handler) do
-    Task.async(fn ->
-      try do
-        Enum.each(1..count, fn _index ->
-          {:ok, socket} = :gen_tcp.accept(listener)
-          request = recv_http_request(socket)
-          handler.(socket, request)
-          :ok = :gen_tcp.close(socket)
-        end)
-      after
-        :gen_tcp.close(listener)
-      end
-    end)
-  end
-
-  defp recv_http_request(socket), do: recv_http_request(socket, "")
-
-  defp recv_http_request(socket, acc) do
-    case :gen_tcp.recv(socket, 0, 1_000) do
-      {:ok, chunk} ->
-        request = acc <> chunk
-
-        if String.contains?(request, "\r\n\r\n") do
-          request
-        else
-          recv_http_request(socket, request)
-        end
-
-      {:error, reason} ->
-        flunk("failed to receive HTTP request: #{inspect(reason)}")
-    end
-  end
-
-  defp send_response(socket, {status, body}) do
-    payload = Jason.encode!(body)
-
-    :ok =
-      :gen_tcp.send(socket, [
-        "HTTP/1.1 #{status} #{reason_phrase(status)}\r\n",
-        "content-type: application/json\r\n",
-        "content-length: #{byte_size(payload)}\r\n",
-        "connection: close\r\n",
-        "\r\n",
-        payload
-      ])
-  end
-
-  defp reason_phrase(200), do: "OK"
-  defp reason_phrase(401), do: "Unauthorized"
-  defp reason_phrase(403), do: "Forbidden"
-  defp reason_phrase(418), do: "I'm a teapot"
-  defp reason_phrase(503), do: "Service Unavailable"
-  defp reason_phrase(_status), do: "Error"
-
   defp start_ha_supervisor_runner(port) do
     device =
       :daisy
@@ -1155,20 +1091,6 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     :exit, _reason -> :ok
   end
 
-  defp clear_persistence_writer_queues do
-    :sys.replace_state(PersistenceWriter, fn state ->
-      %{
-        state
-        | samples: [],
-          sample_count: 0,
-          events: [],
-          event_count: 0,
-          probes: [],
-          probe_count: 0
-      }
-    end)
-  end
-
   defp delete_ha_supervisor_events do
     Repo.delete_all(
       from event in DeviceEvent,
@@ -1184,16 +1106,6 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
         event.event_type == ^event_type
     )
     |> Repo.aggregate(:count, :id)
-  end
-
-  defp wait_for_persistence_writer_flush do
-    Process.sleep(@persistence_writer_flush_interval_ms + 100)
-    wait_until(&persistence_writer_queue_empty?/0)
-  end
-
-  defp persistence_writer_queue_empty? do
-    state = :sys.get_state(PersistenceWriter)
-    state.sample_count == 0 and state.event_count == 0 and state.probe_count == 0
   end
 
   defp wait_until(fun, timeout_ms \\ 1_500) do

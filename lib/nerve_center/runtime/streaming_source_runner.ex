@@ -6,6 +6,7 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
   alias NerveCenter.Messages.SourceSnapshotUpdated
   alias NerveCenter.Metrics.Catalog
   alias NerveCenter.Runtime.AppHealth
+  alias NerveCenter.Runtime.FailureReason
   alias NerveCenter.Runtime.PersistenceWriter
   alias NerveCenter.Runtime.SnapshotStore
   alias NerveCenter.Snapshot.SourceSnapshot
@@ -147,7 +148,7 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
     probe_payload =
       case safe_callback(state, :probe, fn -> state.module.probe(context) end) do
         {:ok, payload} -> %{ok: true, data: payload}
-        {:error, reason} -> %{ok: false, error: inspect(reason)}
+        {:error, reason} -> %{ok: false, error: inspect(FailureReason.sanitize(reason))}
       end
 
     PersistenceWriter.enqueue_probe(%{
@@ -311,11 +312,12 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
     safe_close(state.conn)
 
     backoff_ms = next_backoff_ms(state, reason)
+    sanitized_reason = FailureReason.sanitize(reason)
     observed_at = DateTime.utc_now()
     last_payload_data = Map.put(state.last_payload.data, :connected?, false)
     status = failure_status(state, reason)
 
-    maybe_log_failure(state, status, reason, backoff_ms)
+    maybe_log_failure(state, status, sanitized_reason, backoff_ms)
 
     source_snapshot = %SourceSnapshot{
       device_id: state.device.id,
@@ -324,7 +326,7 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
       observed_at: observed_at,
       last_ok_at: state.last_ok_at,
       last_error_at: observed_at,
-      last_error: inspect(reason),
+      last_error: inspect(sanitized_reason),
       probe_data: state.probe_data,
       consecutive_failures: state.consecutive_failures + 1,
       backoff_ms: backoff_ms,
@@ -333,7 +335,13 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
       data: last_payload_data
     }
 
-    AppHealth.record_source_failure(state.device.id, state.source.name, reason, backoff_ms)
+    AppHealth.record_source_failure(
+      state.device.id,
+      state.source.name,
+      sanitized_reason,
+      backoff_ms
+    )
+
     publish_source_snapshot(state, source_snapshot, observed_at)
 
     timer_ref = schedule_reconnect(backoff_ms)
@@ -349,7 +357,7 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
         consecutive_failures: state.consecutive_failures + 1,
         backoff_ms: backoff_ms,
         last_error_at: observed_at,
-        last_error: inspect(reason),
+        last_error: inspect(sanitized_reason),
         last_payload: %{state.last_payload | data: last_payload_data},
         last_status: status,
         last_frame_at: nil
@@ -457,7 +465,7 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
   end
 
   defp do_publish_success(state, payload) do
-    observed_at = Map.get(payload, :observed_at, DateTime.utc_now())
+    observed_at = observed_at(payload)
     normalized_metrics = Catalog.normalize(Map.get(payload, :metrics, []))
     metric_map = Map.new(normalized_metrics, &{&1.metric_id, &1.metric_value})
     data = payload |> Map.get(:data, %{}) |> Map.put_new(:connected?, true)
@@ -519,6 +527,16 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
     }
   end
 
+  defp observed_at(payload) do
+    case Map.get(payload, :observed_at) do
+      %DateTime{microsecond: {microsecond, _precision}} = observed_at ->
+        %{observed_at | microsecond: {microsecond, 6}}
+
+      _other ->
+        DateTime.utc_now()
+    end
+  end
+
   defp source_snapshot(device_id, source_name) do
     device_id
     |> SnapshotStore.snapshot()
@@ -557,18 +575,22 @@ defmodule NerveCenter.Runtime.StreamingSourceRunner do
     {:ok, fun.()}
   rescue
     error ->
+      message = FailureReason.sanitize(Exception.message(error))
+
       Logger.error(
-        "streaming source #{state.device.id}/#{state.source.name} #{label} crashed: #{Exception.message(error)}"
+        "streaming source #{state.device.id}/#{state.source.name} #{label} crashed: #{message}"
       )
 
-      {:error, {:callback_crash, label, Exception.message(error)}}
+      {:error, {:callback_crash, label, message}}
   catch
     kind, reason ->
+      sanitized_reason = FailureReason.sanitize(reason)
+
       Logger.error(
-        "streaming source #{state.device.id}/#{state.source.name} #{label} #{kind}: #{inspect(reason)}"
+        "streaming source #{state.device.id}/#{state.source.name} #{label} #{kind}: #{inspect(sanitized_reason)}"
       )
 
-      {:error, {:callback_crash, label, {kind, reason}}}
+      {:error, {:callback_crash, label, {kind, sanitized_reason}}}
   end
 
   defp maybe_log_failure(state, status, reason, backoff_ms) do

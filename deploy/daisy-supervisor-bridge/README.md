@@ -96,7 +96,7 @@ Before marking deployment ready:
 ## Manual Acceptance on Daisy
 
 - [ ] Bridge add-on config contains `ports: {"9567/tcp": 9567}` and `host_network: false`.
-- [ ] Daisy's actual Home Assistant add-on architecture is recorded as `amd64`; if Daisy reports a different architecture, this commit updates both `arch` and `BUILD_FROM` and records the observed architecture.
+- [ ] Daisy's actual Home Assistant add-on architecture has replaced the `pending` value in the Architecture gate above before this item is checked; if Daisy reports an architecture other than `amd64`, this commit updates both `arch` and `BUILD_FROM` and records the observed architecture.
 - [ ] The local add-on installs and starts successfully on Daisy with the committed manifest/Dockerfile.
 - [ ] If Daisy's add-on validator rejects direct `CMD` or `init: false`, the add-on has been converted to the supported S6 service layout before continuing.
 - [ ] Bridge refuses to start with a blank token.

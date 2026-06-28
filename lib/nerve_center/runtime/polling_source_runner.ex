@@ -6,6 +6,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
   alias NerveCenter.Messages.SourceSnapshotUpdated
   alias NerveCenter.Metrics.Catalog
   alias NerveCenter.Runtime.AppHealth
+  alias NerveCenter.Runtime.FailureReason
   alias NerveCenter.Runtime.PersistenceWriter
   alias NerveCenter.Runtime.SemanticStatus
   alias NerveCenter.Runtime.SnapshotStore
@@ -95,7 +96,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     probe_payload =
       case safe_callback(state, :probe, fn -> state.module.probe(context) end) do
         {:ok, payload} -> %{ok: true, data: payload}
-        {:error, reason} -> %{ok: false, error: inspect(reason)}
+        {:error, reason} -> %{ok: false, error: inspect(FailureReason.sanitize(reason))}
       end
 
     PersistenceWriter.enqueue_probe(%{
@@ -138,11 +139,19 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
 
   defp handle_failure(state, reason) do
     backoff_ms = next_backoff_ms(state, reason)
-    AppHealth.record_source_failure(state.device.id, state.source.name, reason, backoff_ms)
+    sanitized_reason = FailureReason.sanitize(reason)
+
+    AppHealth.record_source_failure(
+      state.device.id,
+      state.source.name,
+      sanitized_reason,
+      backoff_ms
+    )
+
     observed_at = DateTime.utc_now()
     status = failure_status(state, reason)
 
-    maybe_log_failure(state, status, reason, backoff_ms)
+    maybe_log_failure(state, status, sanitized_reason, backoff_ms)
 
     source_snapshot = %SourceSnapshot{
       device_id: state.device.id,
@@ -151,7 +160,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
       observed_at: observed_at,
       last_ok_at: state.last_ok_at,
       last_error_at: observed_at,
-      last_error: inspect(reason),
+      last_error: inspect(sanitized_reason),
       probe_data: state.probe_data,
       consecutive_failures: state.consecutive_failures + 1,
       backoff_ms: backoff_ms,
@@ -168,7 +177,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
       | consecutive_failures: state.consecutive_failures + 1,
         backoff_ms: backoff_ms,
         last_error_at: observed_at,
-        last_error: inspect(reason),
+        last_error: inspect(sanitized_reason),
         last_status: status
     }
   end
@@ -408,18 +417,22 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     {:ok, fun.()}
   rescue
     error ->
+      message = FailureReason.sanitize(Exception.message(error))
+
       Logger.error(
-        "polling source #{state.device.id}/#{state.source.name} #{label} crashed: #{Exception.message(error)}"
+        "polling source #{state.device.id}/#{state.source.name} #{label} crashed: #{message}"
       )
 
-      {:error, {:callback_crash, label, Exception.message(error)}}
+      {:error, {:callback_crash, label, message}}
   catch
     kind, reason ->
+      sanitized_reason = FailureReason.sanitize(reason)
+
       Logger.error(
-        "polling source #{state.device.id}/#{state.source.name} #{label} #{kind}: #{inspect(reason)}"
+        "polling source #{state.device.id}/#{state.source.name} #{label} #{kind}: #{inspect(sanitized_reason)}"
       )
 
-      {:error, {:callback_crash, label, {kind, reason}}}
+      {:error, {:callback_crash, label, {kind, sanitized_reason}}}
   end
 
   defp maybe_log_failure(state, status, reason, backoff_ms) do
