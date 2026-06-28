@@ -190,7 +190,7 @@ def sanitize_supervisor_info(raw):
 
 def sanitize_addon_info(slug, overview, detail):
     _validate_addon_info(overview)
-    _validate_addon_info(detail)
+    _validate_addon_info(detail, require_core=True)
 
     addon = {
         "slug": slug,
@@ -479,8 +479,9 @@ def _addon_overviews_by_slug(payload):
         if not isinstance(addon, dict):
             raise SupervisorMalformedError("Supervisor add-ons response malformed")
         slug = addon.get("slug")
-        if isinstance(slug, str):
-            by_slug[slug] = addon
+        if not _safe_slug(slug):
+            raise SupervisorMalformedError("Supervisor add-ons response malformed")
+        by_slug[slug] = addon
     return by_slug
 
 
@@ -494,22 +495,37 @@ def _validate_supervisor_info(raw):
     _require_string_field(raw, "arch")
 
 
-def _validate_addon_info(raw):
-    _require_string_field(raw, "slug")
-    _require_string_field(raw, "name")
-    _require_string_field(raw, "state")
-    _require_string_field(raw, "version")
-    _require_string_field(raw, "version_latest")
-    _require_string_field(raw, "boot")
-    _require_string_field(raw, "startup")
-    _require_bool_field(raw, "available")
-    _require_bool_field(raw, "update_available")
-    _require_bool_field(raw, "protected")
-    _require_object_field(raw, "network")
-    _require_object_field(raw, "options")
+def _validate_addon_info(raw, require_core=False):
+    _require_slug_field(raw, "slug", required=require_core)
+    _require_string_field(raw, "name", required=require_core)
+    _require_string_field(raw, "state", required=require_core)
+    _require_string_field(raw, "version", required=require_core)
+    _require_string_field(raw, "version_latest", required=require_core)
+    _require_string_field(raw, "boot", required=require_core)
+    _require_string_field(raw, "startup", required=require_core)
+    _require_bool_field(raw, "available", required=require_core)
+    _require_bool_field(raw, "update_available", required=require_core)
+    _require_bool_field(raw, "protected", required=require_core)
+    _require_object_field(raw, "network", required=require_core)
+    _require_object_field(raw, "options", required=require_core)
 
 
-def _require_string_field(raw, field):
+def _require_slug_field(raw, field, required=False):
+    if field not in raw:
+        if required:
+            raise SupervisorMalformedError("Supervisor response malformed")
+        return
+    if not _safe_slug(raw[field]):
+        raise SupervisorMalformedError("Supervisor response malformed")
+
+
+def _require_string_field(raw, field, required=False):
+    if field not in raw:
+        if required:
+            raise SupervisorMalformedError("Supervisor response malformed")
+        return
+    if required and raw[field] is None:
+        raise SupervisorMalformedError("Supervisor response malformed")
     if field in raw and raw[field] is not None and not isinstance(raw[field], str):
         raise SupervisorMalformedError("Supervisor response malformed")
 
@@ -521,9 +537,24 @@ def _require_bool_field(raw, field, required=False):
         raise SupervisorMalformedError("Supervisor response malformed")
 
 
-def _require_object_field(raw, field):
+def _require_object_field(raw, field, required=False):
+    if field not in raw:
+        if required:
+            raise SupervisorMalformedError("Supervisor response malformed")
+        return
+    if required and raw[field] is None:
+        raise SupervisorMalformedError("Supervisor response malformed")
     if field in raw and raw[field] is not None and not isinstance(raw[field], dict):
         raise SupervisorMalformedError("Supervisor response malformed")
+
+
+def _safe_slug(slug):
+    return (
+        isinstance(slug, str)
+        and slug.strip() != ""
+        and not _contains_control_character(slug)
+        and SLUG_PATTERN.fullmatch(slug) is not None
+    )
 
 
 def _unavailable_addon(slug):

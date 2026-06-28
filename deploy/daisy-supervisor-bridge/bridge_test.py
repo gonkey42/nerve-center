@@ -451,7 +451,23 @@ class BridgeStartupAndAuthTest(unittest.TestCase):
             supervisor=run.FakeSupervisorClient(
                 supervisor_info={"version": "2026.06.2", "healthy": True, "supported": True},
                 addons=[],
-                addon_info={"a0d7b954_nut": {"state": "started", "password": SENSITIVE_VALUE}},
+                addon_info={
+                    "a0d7b954_nut": {
+                        "slug": "a0d7b954_nut",
+                        "name": "Network UPS Tools",
+                        "state": "started",
+                        "available": True,
+                        "version": "1.0.0",
+                        "version_latest": "1.1.0",
+                        "update_available": False,
+                        "boot": "auto",
+                        "startup": "system",
+                        "protected": True,
+                        "network": {"3493/tcp": 3493},
+                        "options": {"users": [], "devices": []},
+                        "password": SENSITIVE_VALUE,
+                    }
+                },
             ),
         )
         server, health_port = run.start_test_server(app)
@@ -1004,6 +1020,53 @@ class BridgeHealthPayloadTest(unittest.TestCase):
                     self.supervisor(details={"a0d7b954_nut": detail})
                 )
 
+    def test_malformed_addon_overview_slug_returns_sanitized_502(self):
+        malformed_addon_lists = [
+            {"addons": [self.overview(slug=None)]},
+            {"addons": [self.overview(slug=123)]},
+            {"addons": [self.overview(slug="")]},
+            {"addons": [self.overview(slug="a0d7b954/nut")]},
+            {"addons": [{"name": "Network UPS Tools", "password": SENSITIVE_VALUE}]},
+        ]
+
+        for addons in malformed_addon_lists:
+            with self.subTest(addons=addons):
+                self.assert_sanitized_502_for_supervisor(
+                    self.supervisor(
+                        addons=addons,
+                        details={"a0d7b954_nut": self.nut_detail()},
+                    )
+                )
+
+    def test_missing_required_addon_detail_fields_return_sanitized_502(self):
+        required_fields = [
+            "slug",
+            "name",
+            "state",
+            "version",
+            "version_latest",
+            "boot",
+            "startup",
+            "available",
+            "update_available",
+            "protected",
+            "network",
+            "options",
+        ]
+
+        self.assert_sanitized_502_for_supervisor(
+            self.supervisor(details={"a0d7b954_nut": {}})
+        )
+
+        for field in required_fields:
+            detail = self.nut_detail()
+            del detail[field]
+
+            with self.subTest(missing_field=field):
+                self.assert_sanitized_502_for_supervisor(
+                    self.supervisor(details={"a0d7b954_nut": detail})
+                )
+
     def test_nut_options_are_summarized_without_password_values(self):
         payload = run.build_health_payload(self.supervisor(), ["a0d7b954_nut"])
         addon = payload["addons"][0]
@@ -1048,6 +1111,13 @@ class BridgeHealthPayloadTest(unittest.TestCase):
             "name": "Unknown Add-on",
             "state": "started",
             "available": True,
+            "version": "1.0.0",
+            "version_latest": "1.1.0",
+            "update_available": False,
+            "boot": "auto",
+            "startup": "system",
+            "protected": True,
+            "network": {"8123/tcp": 8123},
             "options": self.raw_nut_options(),
             "password": SENSITIVE_VALUE,
             "SUPERVISOR_TOKEN": SUPERVISOR_TOKEN_VALUE,
