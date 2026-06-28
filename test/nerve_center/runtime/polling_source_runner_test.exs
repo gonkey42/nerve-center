@@ -392,6 +392,9 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
          :password => opaque_secret,
          "Authorization" => opaque_secret,
          "Traceback" => opaque_secret,
+         "apiToken" => opaque_secret,
+         "refreshToken" => opaque_secret,
+         "access-token" => opaque_secret,
          "nested" => %{"access_token" => opaque_secret}
        }}
 

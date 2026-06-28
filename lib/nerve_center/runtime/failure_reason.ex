@@ -72,20 +72,28 @@ defmodule NerveCenter.Runtime.FailureReason do
   end
 
   defp sensitive_key?(key) do
-    normalized =
-      key
-      |> to_string()
-      |> String.downcase()
+    normalized = normalize_key(key)
 
-    normalized in [
-      "authorization",
-      "password",
-      "token",
-      "access_token",
-      "bridge_token",
-      "traceback"
-    ] or
-      String.ends_with?(normalized, "_token")
+    Enum.any?(["authorization", "password", "token", "traceback"], fn marker ->
+      String.contains?(normalized, marker)
+    end)
+  end
+
+  defp normalize_key(key) when is_binary(key), do: normalize_key_string(key)
+  defp normalize_key(key) when is_atom(key), do: key |> Atom.to_string() |> normalize_key_string()
+
+  defp normalize_key(key) do
+    key
+    |> inspect(limit: :infinity, printable_limit: :infinity)
+    |> normalize_key_string()
+  rescue
+    _error -> ""
+  end
+
+  defp normalize_key_string(key) do
+    key
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]/, "")
   end
 
   defp redact_string(value) do
