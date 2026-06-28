@@ -238,7 +238,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
     required = config_required?(config)
     expected_states = config_value(config, :expected_states, [])
     state = sanitize(value(observed, :state))
-    available = value(observed, :available, true)
+    available = boolean_value(observed, :available)
     warnings = normalize_warnings(value(observed, :config_warnings, []))
 
     base = %{
@@ -254,7 +254,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
       available: available,
       boot: sanitize(value(observed, :boot)),
       startup: sanitize(value(observed, :startup)),
-      protected: value(observed, :protected),
+      protected: boolean_value(observed, :protected),
       network: sanitize(value(observed, :network, %{})),
       version: sanitize(value(observed, :version)),
       version_latest: sanitize(value(observed, :version_latest)),
@@ -501,6 +501,13 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
   defp config_required?(config), do: config_value(config, :required, false) == true
 
   defp config_value(map, key, default \\ nil), do: value(map, key, default)
+
+  defp boolean_value(map, key) do
+    case value(map, key) do
+      value when is_boolean(value) -> value
+      _other -> nil
+    end
+  end
 
   defp value(map, key, default \\ nil)
 

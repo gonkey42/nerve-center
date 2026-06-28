@@ -459,8 +459,10 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
                        addon_payload(%{
                          "name" => "Network UPS Tools #{@forbidden_supervisor_token}",
                          "state" => "Traceback Bearer #{@forbidden_bridge_token}",
+                         "available" => "true #{@forbidden_bridge_token}",
                          "boot" => "auto #{@forbidden_password}",
                          "startup" => "Authorization: Bearer #{@forbidden_bridge_token}",
+                         "protected" => "false #{@forbidden_supervisor_token}",
                          "version" => "0.18.0 #{@forbidden_bridge_token}",
                          "version_latest" => "Traceback #{@forbidden_supervisor_token}"
                        })
@@ -477,6 +479,8 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     assert payload.status == :error
     assert addon(payload, "a0d7b954_nut").status == :error
     assert has_problem?(payload, "a0d7b954_nut", :required_addon_unhealthy)
+    assert is_nil(addon(payload, "a0d7b954_nut").available)
+    assert is_nil(addon(payload, "a0d7b954_nut").protected)
 
     assert payload.private.ha_supervisor_addon_states["a0d7b954_nut"] !=
              "Traceback Bearer #{@forbidden_bridge_token}"
