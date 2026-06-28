@@ -58,4 +58,22 @@ defmodule NerveCenter.Runtime.FailureReasonTest do
     refute encoded =~ @opaque_secret
     assert encoded =~ "safe value"
   end
+
+  test "redacts sensitive key value pairs in binary reasons" do
+    cases = [
+      {"client_secret=#{@opaque_secret}", "client_secret=[REDACTED]"},
+      {"apiKey: #{@opaque_secret}", "apiKey: [REDACTED]"},
+      {"session_id #{@opaque_secret}", "session_id [REDACTED]"},
+      {"credential=#{@opaque_secret}", "credential=[REDACTED]"}
+    ]
+
+    for {fragment, expected} <- cases do
+      sanitized = FailureReason.sanitize("bridge failed #{fragment} while polling")
+
+      refute sanitized =~ @opaque_secret
+      assert sanitized =~ "bridge failed"
+      assert sanitized =~ "while polling"
+      assert sanitized =~ expected
+    end
+  end
 end

@@ -17,6 +17,11 @@ defmodule NerveCenter.Runtime.FailureReason do
     "csrf",
     "traceback"
   ]
+  @sensitive_key_marker_pattern Enum.join(@sensitive_key_markers, "|")
+  @sensitive_key_value_pattern "\\b([A-Za-z0-9_-]*(?:#{@sensitive_key_marker_pattern})[A-Za-z0-9_-]*)\\b" <>
+                                 "(\\s*(?:=|:)\\s*|\\s+)" <>
+                                 "(?:\"[^\"]*\"|'[^']*'|[^\\s,;&]+)"
+  @sensitive_key_value_regex Regex.compile!(@sensitive_key_value_pattern, "i")
 
   def sanitize({kind, status, body}) when kind in [:auth, :http] and is_integer(status) do
     {kind, status, sanitize_response_body(body)}
@@ -113,12 +118,19 @@ defmodule NerveCenter.Runtime.FailureReason do
 
   defp redact_string(value) do
     value
+    |> redact_sensitive_key_values()
     |> redact_regex(~r/Traceback/i, "[REDACTED]")
     |> redact_regex(~r/Authorization:\s*Bearer\s+[A-Za-z0-9_-]{20,}/i, "[REDACTED]")
     |> redact_regex(~r/Bearer\s+[A-Za-z0-9_-]{20,}/, "Bearer [REDACTED]")
     |> redact_regex(~r/Authorization/i, "[REDACTED]")
     |> redact_regex(~r/[A-Za-z0-9_-]*token[A-Za-z0-9_-]*/i, "[REDACTED]")
     |> redact_regex(~r/[A-Za-z0-9_-]*password[A-Za-z0-9_-]*/i, "[REDACTED]")
+  end
+
+  defp redact_sensitive_key_values(value) do
+    Regex.replace(@sensitive_key_value_regex, value, fn _match, key, separator ->
+      key <> separator <> "[REDACTED]"
+    end)
   end
 
   defp redact_regex(value, regex, replacement), do: Regex.replace(regex, value, replacement)
