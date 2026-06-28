@@ -80,16 +80,23 @@ defmodule NerveCenter.Runtime.FailureReasonTest do
   end
 
   test "redacts bearer tokens in binary authorization reasons" do
+    jwt_secret = "eyJhbGciOiJIUzI1NiJ9.payload.signature"
+
     cases = [
       "Authorization: Bearer #{@opaque_secret}",
       "authorization: bearer #{@opaque_secret}",
-      "bridge failed Bearer #{@opaque_secret} while polling"
+      "bridge failed Bearer #{@opaque_secret} while polling",
+      "Authorization: Bearer #{jwt_secret}",
+      "authorization: bearer #{jwt_secret}",
+      "bridge failed Bearer #{jwt_secret} while polling"
     ]
 
     for reason <- cases do
       sanitized = FailureReason.sanitize(reason)
 
       refute sanitized =~ @opaque_secret
+      refute sanitized =~ jwt_secret
+      refute sanitized =~ "payload.signature"
       assert sanitized =~ "[REDACTED]"
     end
   end

@@ -421,11 +421,17 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
 
   test "runner redacts raw binary authorization bearer failure reasons from failure surfaces" do
     opaque_secret = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01"
+    jwt_secret = "eyJhbGciOiJIUzI1NiJ9.payload.signature"
 
     reason =
-      "bridge failed Authorization: Bearer #{opaque_secret}; authorization: bearer #{opaque_secret}"
+      "bridge failed Authorization: Bearer #{opaque_secret}; authorization: bearer #{opaque_secret}; " <>
+        "Authorization: Bearer #{jwt_secret}"
 
-    assert_runner_redacts_raw_failure_body(reason, [opaque_secret])
+    assert_runner_redacts_raw_failure_body(reason, [
+      opaque_secret,
+      jwt_secret,
+      "payload.signature"
+    ])
   end
 
   test "runner redacts serialized sensitive key value failure reasons from failure surfaces" do

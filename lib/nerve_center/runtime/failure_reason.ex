@@ -123,8 +123,8 @@ defmodule NerveCenter.Runtime.FailureReason do
   defp redact_string(value) do
     value
     |> redact_regex(~r/Traceback/i, "[REDACTED]")
-    |> redact_regex(~r/Authorization:\s*Bearer\s+[A-Za-z0-9_-]{20,}/i, "[REDACTED]")
-    |> redact_regex(~r/Bearer\s+[A-Za-z0-9_-]{20,}/i, "Bearer [REDACTED]")
+    |> redact_regex(~r/Authorization:\s*Bearer\s+[^,\s;]+/i, "[REDACTED]")
+    |> redact_regex(~r/Bearer\s+[^,\s;]+/i, "Bearer [REDACTED]")
     |> redact_sensitive_key_values()
     |> redact_regex(~r/Authorization/i, "[REDACTED]")
     |> redact_regex(~r/[A-Za-z0-9_-]*token[A-Za-z0-9_-]*/i, "[REDACTED]")
