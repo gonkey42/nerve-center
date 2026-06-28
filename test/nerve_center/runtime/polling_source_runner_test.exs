@@ -14,7 +14,12 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
     ]
 
   import NerveCenter.TestSupport.PersistenceWriterHelpers,
-    only: [clear_persistence_writer_queues: 0, persistence_writer_queue_empty?: 0]
+    only: [
+      clear_persistence_writer_queues: 0,
+      persistence_writer_queue_empty?: 0,
+      wait_for_persisted_count: 3,
+      wait_for_persistence_writer_drain: 0
+    ]
 
   alias NerveCenter.Messages.AppHealthUpdated
   alias NerveCenter.Messages.DeviceSnapshotUpdated
@@ -1093,11 +1098,15 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
     assert_forbidden_absent(log)
     assert_values_absent(log, extra_forbidden_values)
 
-    wait_until(fn ->
-      AppHealth.source_state(device.id, source_name).last_error &&
-        persistence_writer_queue_empty?() &&
-        persisted_probe_count(device.id, source_name) >= 1
-    end)
+    wait_until(fn -> AppHealth.source_state(device.id, source_name).last_error end)
+
+    wait_for_persisted_count(
+      "source probe #{device.id}/#{source_name}",
+      fn -> persisted_probe_count(device.id, source_name) end,
+      1
+    )
+
+    wait_for_persistence_writer_drain()
 
     assert_forbidden_absent(AppHealth.source_state(device.id, source_name))
     assert_forbidden_absent(SnapshotStore.snapshot(device.id))

@@ -33,6 +33,18 @@ defmodule NerveCenter.TestSupport.PersistenceWriterHelpers do
 
   def persistence_writer_queue_empty?, do: persistence_writer_idle?()
 
+  def wait_for_persisted_count(label, count_fun, expected_min_count, timeout_ms \\ 1_500)
+      when is_function(count_fun, 0) and is_integer(expected_min_count) do
+    wait_until(
+      fn ->
+        PersistenceWriter.flush_now()
+        count_fun.() >= expected_min_count
+      end,
+      timeout_ms,
+      "expected #{label} count to reach at least #{expected_min_count}"
+    )
+  end
+
   def assert_persistence_count_stable(label, count_fun, expected_count, opts \\ [])
       when is_function(count_fun, 0) and is_integer(expected_count) do
     flush_interval_ms = PersistenceWriter.flush_interval_ms()
@@ -117,20 +129,20 @@ defmodule NerveCenter.TestSupport.PersistenceWriterHelpers do
         {:message_queue_len, 0}
   end
 
-  def wait_until(fun, timeout_ms \\ 1_500) do
+  def wait_until(fun, timeout_ms \\ 1_500, message \\ "condition was not met before timeout") do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
-    do_wait_until(fun, deadline)
+    do_wait_until(fun, deadline, message)
   end
 
-  defp do_wait_until(fun, deadline) do
+  defp do_wait_until(fun, deadline, message) do
     if fun.() do
       :ok
     else
       if System.monotonic_time(:millisecond) >= deadline do
-        flunk("condition was not met before timeout")
+        flunk(message)
       else
         Process.sleep(@poll_interval_ms)
-        do_wait_until(fun, deadline)
+        do_wait_until(fun, deadline, message)
       end
     end
   end
