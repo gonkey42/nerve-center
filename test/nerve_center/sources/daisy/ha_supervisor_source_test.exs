@@ -43,7 +43,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
 
   @tag :poll
   test "probe records bridge base url watched addons and protocol" do
-    context = %{source: source_config(1234)}
+    context = runtime_context(1234)
 
     assert {:ok, probe} = @source.probe(context)
 
@@ -64,6 +64,25 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
   end
 
   @tag :poll
+  test "probe reads bridge config from device when source only has runner metadata" do
+    context = %{device: device_config(1234), source: source_metadata_config(), private: %{}}
+
+    assert {:ok, probe} = @source.probe(context)
+
+    assert probe.bridge_base_url == "http://127.0.0.1:1234"
+
+    assert probe.watched_addons == [
+             %{
+               slug: "a0d7b954_nut",
+               label: "Network UPS Tools",
+               required: true,
+               expected_states: ["started"],
+               config_checks: [:nut_addon]
+             }
+           ]
+  end
+
+  @tag :poll
   test "poll sends authorization bearer token" do
     {listener, port} = listen_socket()
 
@@ -78,7 +97,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
         send_response(socket, {200, bridge_payload()})
       end)
 
-    assert {:ok, body} = @source.poll(%{source: source_config(port)})
+    assert {:ok, body} = @source.poll(runtime_context(port))
     assert body["supervisor"]["version"] == "2026.06.2"
 
     Task.await(server)
@@ -115,12 +134,13 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
         send_response(socket, {200, bridge_payload()})
       end)
 
-    source =
+    device =
       port
-      |> source_config()
+      |> device_config()
       |> Map.put(:supervisor_bridge_base_url, "http://127.0.0.1:#{port}/")
 
-    assert {:ok, _body} = @source.poll(%{source: source})
+    assert {:ok, _body} =
+             @source.poll(%{device: device, source: source_metadata_config(), private: %{}})
 
     Task.await(server)
   end
@@ -678,7 +698,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
         send_response(socket, {status, @forbidden_body})
       end)
 
-    assert {:error, ^expected} = @source.poll(%{source: source_config(port)})
+    assert {:error, ^expected} = @source.poll(runtime_context(port))
 
     rendered = inspect(expected)
     refute rendered =~ @forbidden_password
@@ -695,15 +715,16 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
   end
 
   defp context(addons \\ nil, private \\ %{}) do
-    %{source: source_config(0, addons), private: private}
+    runtime_context(0, addons, private)
   end
 
-  defp source_config(port, addons \\ nil) do
+  defp runtime_context(port, addons \\ nil, private \\ %{}) do
+    %{device: device_config(port, addons), source: source_metadata_config(), private: private}
+  end
+
+  defp device_config(port, addons \\ nil) do
     %{
-      name: :ha_supervisor,
-      module: NerveCenter.Sources.Daisy.HASupervisorSource,
-      enabled: true,
-      interval_ms: 60_000,
+      id: :daisy,
       supervisor_bridge_base_url: "http://127.0.0.1:#{port}",
       supervisor_addons:
         addons ||
@@ -716,6 +737,15 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
               config_checks: [:nut_addon]
             }
           ]
+    }
+  end
+
+  defp source_metadata_config do
+    %{
+      name: :ha_supervisor,
+      module: NerveCenter.Sources.Daisy.HASupervisorSource,
+      enabled: true,
+      interval_ms: 60_000
     }
   end
 

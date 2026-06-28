@@ -16,13 +16,15 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
 
   @impl true
   def probe(context) do
+    supervisor_addons = supervisor_addons(context)
+
     {:ok,
      %{
-       bridge_base_url: context.source.supervisor_bridge_base_url,
+       bridge_base_url: supervisor_bridge_base_url(context),
        protocol: "HTTP JSON bridge",
        watched_addons:
          Enum.map(
-           context.source.supervisor_addons,
+           supervisor_addons,
            &Map.take(&1, [:slug, :label, :required, :expected_states, :config_checks])
          )
      }}
@@ -30,7 +32,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
 
   @impl true
   def poll(context) do
-    url = String.trim_trailing(context.source.supervisor_bridge_base_url, "/") <> "/health"
+    url = String.trim_trailing(supervisor_bridge_base_url(context), "/") <> "/health"
 
     case Support.request_json(url,
            headers: [
@@ -63,7 +65,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
          {:ok, observed_at} <- parse_observed_at(value(raw, :observed_at)),
          {:ok, observed_addons} <- observed_addons(addons_raw) do
       supervisor = normalize_supervisor(supervisor_raw)
-      addons = normalize_addons(context.source.supervisor_addons, observed_addons)
+      addons = normalize_addons(supervisor_addons(context), observed_addons)
       problems = supervisor.problems ++ Enum.flat_map(addons, & &1.problems)
       status = status_for(problems)
       required_unhealthy_count = unhealthy_count(addons, true)
@@ -109,6 +111,30 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
        }}
     else
       {:error, reason} -> {:error, {:invalid_supervisor_bridge_payload, reason}}
+    end
+  end
+
+  defp supervisor_bridge_base_url(context) do
+    supervisor_config(context, :supervisor_bridge_base_url)
+  end
+
+  defp supervisor_addons(context) do
+    supervisor_config(context, :supervisor_addons)
+  end
+
+  defp supervisor_config(context, key) do
+    device = Map.get(context, :device, %{})
+    source = Map.get(context, :source, %{})
+
+    cond do
+      is_map(device) and Map.has_key?(device, key) ->
+        Map.fetch!(device, key)
+
+      is_map(source) and Map.has_key?(source, key) ->
+        Map.fetch!(source, key)
+
+      true ->
+        raise KeyError, key: key, term: context
     end
   end
 
@@ -458,7 +484,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
 
   defp recovery_event(fingerprint, context) do
     slug = fingerprint |> String.split(":", parts: 2) |> List.first()
-    label = addon_label(context.source.supervisor_addons, slug)
+    label = addon_label(supervisor_addons(context), slug)
 
     %{
       event_type: :ha_supervisor_addon_recovered,

@@ -169,17 +169,7 @@ config :nerve_center, :devices, [
         name: :ha_supervisor,
         module: NerveCenter.Sources.Daisy.HASupervisorSource,
         enabled: true,
-        interval_ms: 60_000,
-        supervisor_bridge_base_url: "http://100.103.249.3:9567",
-        supervisor_addons: [
-          %{
-            slug: "a0d7b954_nut",
-            label: "Network UPS Tools",
-            required: true,
-            expected_states: ["started"],
-            config_checks: [:nut_addon]
-          }
-        ]
+        interval_ms: 60_000
       }
     ]
   },

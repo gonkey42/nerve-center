@@ -32,16 +32,7 @@ devices =
   end)
   |> Enum.map(fn
     %{id: :daisy} = device ->
-      sources =
-        Enum.map(device.sources, fn
-          %{name: :ha_supervisor} = source ->
-            %{source | supervisor_bridge_base_url: "http://127.0.0.1:9567"}
-
-          source ->
-            source
-        end)
-
-      %{device | supervisor_bridge_base_url: "http://127.0.0.1:9567", sources: sources}
+      %{device | supervisor_bridge_base_url: "http://127.0.0.1:9567"}
 
     device ->
       device
