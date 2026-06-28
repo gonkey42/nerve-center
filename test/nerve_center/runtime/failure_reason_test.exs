@@ -6,28 +6,44 @@ defmodule NerveCenter.Runtime.FailureReasonTest do
   @opaque_secret "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01"
 
   test "redacts values for common sensitive key variants" do
-    sanitized =
-      FailureReason.sanitize(%{
-        "apiToken" => @opaque_secret,
-        "refreshToken" => @opaque_secret,
-        "access-token" => @opaque_secret,
-        "access_token" => @opaque_secret,
-        "bridge-token" => @opaque_secret,
-        :api_token => @opaque_secret,
-        "apiKey" => @opaque_secret,
-        "client_secret" => @opaque_secret,
-        "secret" => @opaque_secret,
-        "private-key" => @opaque_secret,
-        "private_key" => @opaque_secret,
-        "Authorization" => @opaque_secret,
-        "password" => @opaque_secret,
-        "Traceback" => @opaque_secret
-      })
+    sensitive_keys = [
+      "auth",
+      "authHeader",
+      "authorization",
+      "x-auth-header",
+      "credential",
+      "credentials",
+      "client_credentials",
+      "password",
+      "passwd",
+      "passphrase",
+      "apiToken",
+      "refreshToken",
+      "access-token",
+      "access_token",
+      "bridge-token",
+      :api_token,
+      "apiKey",
+      "client_secret",
+      "secret",
+      "private-key",
+      "private_key",
+      "cookie",
+      "session",
+      "session_id",
+      "sid",
+      "csrf",
+      "csrf-token",
+      "Traceback"
+    ]
 
-    encoded = inspect(sanitized, limit: :infinity, printable_limit: :infinity)
+    for key <- sensitive_keys do
+      sanitized = FailureReason.sanitize(%{key => @opaque_secret})
+      encoded = inspect(sanitized, limit: :infinity, printable_limit: :infinity)
 
-    refute encoded =~ @opaque_secret
-    assert encoded =~ "redacted_sensitive_value"
+      refute encoded =~ @opaque_secret, "expected #{inspect(key)} to redact its value"
+      assert encoded =~ "redacted_sensitive_value"
+    end
   end
 
   test "does not raise for arbitrary map keys" do

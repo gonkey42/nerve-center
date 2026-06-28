@@ -2,6 +2,21 @@ defmodule NerveCenter.Runtime.FailureReason do
   @moduledoc false
 
   @redacted_response_body :redacted_response_body
+  @sensitive_key_markers [
+    "auth",
+    "credential",
+    "password",
+    "passwd",
+    "passphrase",
+    "token",
+    "key",
+    "secret",
+    "cookie",
+    "session",
+    "sid",
+    "csrf",
+    "traceback"
+  ]
 
   def sanitize({kind, status, body}) when kind in [:auth, :http] and is_integer(status) do
     {kind, status, sanitize_response_body(body)}
@@ -74,7 +89,7 @@ defmodule NerveCenter.Runtime.FailureReason do
   defp sensitive_key?(key) do
     normalized = normalize_key(key)
 
-    Enum.any?(["authorization", "password", "token", "traceback", "key", "secret"], fn marker ->
+    Enum.any?(@sensitive_key_markers, fn marker ->
       String.contains?(normalized, marker)
     end)
   end

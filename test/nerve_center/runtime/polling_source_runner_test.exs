@@ -398,6 +398,11 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
          "apiKey" => opaque_secret,
          "client_secret" => opaque_secret,
          "private-key" => opaque_secret,
+         "authHeader" => opaque_secret,
+         "credentials" => opaque_secret,
+         "passwd" => opaque_secret,
+         "session_id" => opaque_secret,
+         "csrf-token" => opaque_secret,
          "nested" => %{"access_token" => opaque_secret}
        }}
 
