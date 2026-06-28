@@ -162,6 +162,54 @@ defmodule NerveCenter.Metrics.Catalog do
       rollup?: true,
       prometheus_name: "ups_low_battery_flag"
     },
+    ha_supervisor_healthy_flag: %{
+      id: :ha_supervisor_healthy_flag,
+      unit: :flag,
+      value_type: :integer,
+      display_format: :boolean,
+      rollup?: true,
+      prometheus_name: "ha_supervisor_healthy_flag"
+    },
+    ha_supervisor_supported_flag: %{
+      id: :ha_supervisor_supported_flag,
+      unit: :flag,
+      value_type: :integer,
+      display_format: :boolean,
+      rollup?: true,
+      prometheus_name: "ha_supervisor_supported_flag"
+    },
+    ha_supervisor_required_addons_unhealthy_count: %{
+      id: :ha_supervisor_required_addons_unhealthy_count,
+      unit: :count,
+      value_type: :integer,
+      display_format: :count,
+      rollup?: true,
+      prometheus_name: "ha_supervisor_required_addons_unhealthy_count"
+    },
+    ha_supervisor_optional_addons_unhealthy_count: %{
+      id: :ha_supervisor_optional_addons_unhealthy_count,
+      unit: :count,
+      value_type: :integer,
+      display_format: :count,
+      rollup?: true,
+      prometheus_name: "ha_supervisor_optional_addons_unhealthy_count"
+    },
+    ha_supervisor_addons_update_available_count: %{
+      id: :ha_supervisor_addons_update_available_count,
+      unit: :count,
+      value_type: :integer,
+      display_format: :count,
+      rollup?: true,
+      prometheus_name: "ha_supervisor_addons_update_available_count"
+    },
+    ha_supervisor_addons_config_warning_count: %{
+      id: :ha_supervisor_addons_config_warning_count,
+      unit: :count,
+      value_type: :integer,
+      display_format: :count,
+      rollup?: true,
+      prometheus_name: "ha_supervisor_addons_config_warning_count"
+    },
     frigate_detection_fps: %{
       id: :frigate_detection_fps,
       unit: :count,

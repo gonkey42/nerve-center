@@ -28,6 +28,8 @@
     <string>REPLACE_ME</string>
     <key>HA_TOKEN</key>
     <string>REPLACE_ME</string>
+    <key>DAISY_SUPERVISOR_BRIDGE_TOKEN</key>
+    <string>REPLACE_ME</string>
     <key>UNIFI_API_KEY</key>
     <string>REPLACE_ME</string>
     <key>PLEX_TOKEN</key>

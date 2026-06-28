@@ -134,6 +134,16 @@ config :nerve_center, :devices, [
     offline_expected: false,
     hub_module: NerveCenter.Devices.DaisyHub,
     home_assistant_base_url: "http://100.103.249.3:8123",
+    supervisor_bridge_base_url: "http://100.103.249.3:9567",
+    supervisor_addons: [
+      %{
+        slug: "a0d7b954_nut",
+        label: "Network UPS Tools",
+        required: true,
+        expected_states: ["started"],
+        config_checks: [:nut_addon]
+      }
+    ],
     curated_entity_ids: [
       "weather.home",
       "sensor.home_relative_humidity",
@@ -154,6 +164,22 @@ config :nerve_center, :devices, [
         module: NerveCenter.Sources.Daisy.HARestProbe,
         enabled: true,
         interval_ms: 300_000
+      },
+      %{
+        name: :ha_supervisor,
+        module: NerveCenter.Sources.Daisy.HASupervisorSource,
+        enabled: true,
+        interval_ms: 60_000,
+        supervisor_bridge_base_url: "http://100.103.249.3:9567",
+        supervisor_addons: [
+          %{
+            slug: "a0d7b954_nut",
+            label: "Network UPS Tools",
+            required: true,
+            expected_states: ["started"],
+            config_checks: [:nut_addon]
+          }
+        ]
       }
     ]
   },

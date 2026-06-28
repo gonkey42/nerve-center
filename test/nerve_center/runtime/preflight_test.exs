@@ -16,6 +16,7 @@ defmodule NerveCenter.Runtime.PreflightTest do
     assert "NUT_PASSWORD" in required_env
     assert "IMMICH_API_KEY" in required_env
     assert "HA_TOKEN" in required_env
+    assert "DAISY_SUPERVISOR_BRIDGE_TOKEN" in required_env
     assert "UNIFI_API_KEY" in required_env
   end
 
