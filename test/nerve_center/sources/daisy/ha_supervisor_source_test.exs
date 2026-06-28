@@ -494,6 +494,108 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     assert addon(payload, "a0d7b954_nut").config_summary["password_set"] == true
   end
 
+  test "normalize redacts sensitive map-key values while preserving safe warning codes" do
+    opaque_values = [
+      secret = "opaque-alpha-111",
+      client_secret = "opaque-bravo-222",
+      api_key = "opaque-charlie-333",
+      credential = "opaque-delta-444",
+      auth_header = "opaque-echo-555",
+      session_id = "opaque-foxtrot-666",
+      cookie = "opaque-golf-777",
+      traceback = "opaque-hotel-888",
+      warning_secret = "opaque-india-999",
+      warning_api_key = "opaque-juliet-000"
+    ]
+
+    payload =
+      normalize!(
+        bridge_payload(%{
+          "addons" => [
+            addon_payload(%{
+              "config_summary" => %{
+                "secret" => secret,
+                "client_secret" => client_secret,
+                "apiKey" => api_key,
+                "credential" => credential,
+                "auth-header" => auth_header,
+                "session_id" => session_id,
+                "cookie" => cookie,
+                "traceback" => traceback,
+                "password_set" => true,
+                "safe_warning_code" => "nut_password_blank"
+              },
+              "config_warnings" => [
+                %{
+                  "severity" => "critical",
+                  "code" => "nut_password_blank",
+                  "secret" => warning_secret,
+                  "apiKey" => warning_api_key
+                }
+              ]
+            })
+          ]
+        })
+      )
+
+    addon = addon(payload, "a0d7b954_nut")
+    summary = addon.config_summary
+    [warning] = addon.config_warnings
+
+    assert summary["secret"] == "[REDACTED]"
+    assert summary["client_secret"] == "[REDACTED]"
+    assert summary["apiKey"] == "[REDACTED]"
+    assert summary["credential"] == "[REDACTED]"
+    assert summary["auth-header"] == "[REDACTED]"
+    assert summary["session_id"] == "[REDACTED]"
+    assert summary["cookie"] == "[REDACTED]"
+    assert summary["traceback"] == "[REDACTED]"
+    assert summary["password_set"] == true
+    assert summary["safe_warning_code"] == "nut_password_blank"
+    assert warning["code"] == "nut_password_blank"
+    assert warning["secret"] == "[REDACTED]"
+    assert warning["apiKey"] == "[REDACTED]"
+    assert Enum.any?(addon.problems, &(&1.value == "nut_password_blank"))
+
+    rendered = inspect(payload)
+    assert rendered =~ "nut_password_blank"
+
+    for opaque_value <- opaque_values do
+      refute rendered =~ opaque_value
+    end
+  end
+
+  test "normalize handles arbitrary map keys when detecting sensitive values" do
+    private_key = "opaque-kilo-111"
+    credential = "opaque-lima-222"
+
+    payload =
+      normalize!(
+        bridge_payload(%{
+          "addons" => [
+            addon_payload(%{
+              "config_summary" => %{
+                {:"private-key", :tuple} => private_key,
+                {:credential, :tuple} => credential,
+                {:warning_code, :tuple} => "nut_password_blank"
+              }
+            })
+          ]
+        })
+      )
+
+    summary = addon(payload, "a0d7b954_nut").config_summary
+
+    assert summary[{:"private-key", :tuple}] == "[REDACTED]"
+    assert summary[{:credential, :tuple}] == "[REDACTED]"
+    assert summary[{:warning_code, :tuple}] == "nut_password_blank"
+
+    rendered = inspect(payload)
+    assert rendered =~ "nut_password_blank"
+    refute rendered =~ private_key
+    refute rendered =~ credential
+  end
+
   test "normalize sanitizes warning strings before data problems fingerprints events and logs" do
     parent = self()
 

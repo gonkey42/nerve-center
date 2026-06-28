@@ -7,6 +7,22 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
   alias NerveCenter.Sources.Support
 
   @safe_config_warning_codes ~w(nut_username_blank nut_password_blank nut_port_unmapped)
+  @safe_sensitive_key_names ~w(passwordset)
+  @sensitive_key_markers [
+    "auth",
+    "credential",
+    "password",
+    "passwd",
+    "passphrase",
+    "token",
+    "key",
+    "secret",
+    "cookie",
+    "session",
+    "sid",
+    "csrf",
+    "traceback"
+  ]
 
   @impl true
   def required_env, do: ["DAISY_SUPERVISOR_BRIDGE_TOKEN"]
@@ -652,12 +668,26 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
   end
 
   defp sensitive_key?(key) do
-    normalized =
-      key
-      |> to_string()
-      |> String.downcase()
+    normalized = normalize_key(key)
 
-    normalized in ["authorization", "password", "token", "access_token", "bridge_token"] or
-      String.ends_with?(normalized, "_token")
+    normalized not in @safe_sensitive_key_names and
+      Enum.any?(@sensitive_key_markers, &String.contains?(normalized, &1))
+  end
+
+  defp normalize_key(key) when is_binary(key), do: normalize_key_string(key)
+  defp normalize_key(key) when is_atom(key), do: key |> Atom.to_string() |> normalize_key_string()
+
+  defp normalize_key(key) do
+    key
+    |> inspect(limit: :infinity, printable_limit: :infinity)
+    |> normalize_key_string()
+  rescue
+    _error -> ""
+  end
+
+  defp normalize_key_string(key) do
+    key
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]/, "")
   end
 end
