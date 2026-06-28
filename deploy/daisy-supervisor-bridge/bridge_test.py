@@ -61,6 +61,39 @@ class BridgeStartupAndAuthTest(unittest.TestCase):
             method=method,
         )
 
+    def raw_http_request(self, port, request_bytes):
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as connection:
+            connection.settimeout(2)
+            connection.sendall(request_bytes)
+            chunks = []
+            while True:
+                chunk = connection.recv(4096)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        return b"".join(chunks)
+
+    def raw_request_bytes(self, method, path, authorization=None):
+        lines = [
+            f"{method} {path} HTTP/1.1",
+            "Host: 127.0.0.1",
+            "Connection: close",
+        ]
+        if authorization is not None:
+            lines.append(f"Authorization: {authorization}")
+        return ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
+
+    def assert_raw_json_response(self, response, expected_status, expected_body):
+        headers, separator, body = response.partition(b"\r\n\r\n")
+        self.assertEqual(separator, b"\r\n\r\n", response.decode("latin-1", errors="replace"))
+        status_line = headers.splitlines()[0].decode("ascii")
+        self.assertEqual(int(status_line.split()[1]), expected_status)
+        body_text = body.decode("utf-8")
+        self.assertEqual(json.loads(body_text), expected_body)
+        self.assertNotIn("Traceback", body_text)
+        self.assertNotIn("<html", body_text.lower())
+        return body_text
+
     def test_validate_options_rejects_blank_token(self):
         with self.assertRaisesRegex(run.ConfigError, "bridge token is required"):
             run.validate_options({"token": "", "watched_addons": ["a0d7b954_nut"]})
@@ -186,6 +219,53 @@ class BridgeStartupAndAuthTest(unittest.TestCase):
             with self.subTest(authorization=authorization):
                 request = self.auth_request(port, "/health", authorization=authorization)
                 self.assert_error_response(request, 401, {"error": "unauthorized"})
+
+    def test_unsupported_methods_authenticate_before_method_handling(self):
+        port = self.start_exploding_app()
+
+        for method in ["TRACE", "CONNECT", "BREW"]:
+            for authorization in [None, f"Bearer {SENSITIVE_VALUE}"]:
+                with self.subTest(method=method, authorization=authorization):
+                    response = self.raw_http_request(port, self.raw_request_bytes(method, "/health", authorization))
+                    body = self.assert_raw_json_response(response, 401, {"error": "unauthorized"})
+                    self.assertNotIn(SENSITIVE_VALUE, body)
+
+            with self.subTest(method=method, authorization="valid-health"):
+                response = self.raw_http_request(
+                    port,
+                    self.raw_request_bytes(method, "/health", f"Bearer {STRONG_TOKEN}"),
+                )
+                body = self.assert_raw_json_response(response, 405, {"error": "method_not_allowed"})
+                self.assertNotIn(STRONG_TOKEN, body)
+
+            with self.subTest(method=method, authorization="valid-unknown"):
+                response = self.raw_http_request(
+                    port,
+                    self.raw_request_bytes(method, "/not-health", f"Bearer {STRONG_TOKEN}"),
+                )
+                body = self.assert_raw_json_response(response, 404, {"error": "not_found"})
+                self.assertNotIn(STRONG_TOKEN, body)
+
+    def test_non_ascii_authorization_header_returns_generic_401(self):
+        port = self.start_exploding_app()
+        request = (
+            b"GET /health HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Connection: close\r\n"
+            b"Authorization: Bearer \xc3\xa9-token\r\n"
+            b"\r\n"
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            response = self.raw_http_request(port, request)
+
+        body = self.assert_raw_json_response(response, 401, {"error": "unauthorized"})
+        output = stdout.getvalue() + stderr.getvalue()
+        self.assertNotIn("Traceback", body)
+        self.assertNotIn("Traceback", output)
+        self.assertNotIn("Authorization", output)
 
     def test_exact_health_path_is_not_widened(self):
         port = self.start_exploding_app()

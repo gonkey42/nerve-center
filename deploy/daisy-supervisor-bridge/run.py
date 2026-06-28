@@ -6,7 +6,6 @@ import os
 import re
 import socketserver
 import sys
-import threading
 import urllib.error
 import urllib.request
 
@@ -153,6 +152,25 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
     server_version = "DaisySupervisorBridge"
     sys_version = ""
 
+    def handle_one_request(self):
+        try:
+            self.raw_requestline = self.rfile.readline(65537)
+            if len(self.raw_requestline) > 65536:
+                self.requestline = ""
+                self.request_version = ""
+                self.command = ""
+                self.send_error(414)
+                return
+            if not self.raw_requestline:
+                self.close_connection = True
+                return
+            if not self.parse_request():
+                return
+            self._handle_bridge_request()
+            self.wfile.flush()
+        except TimeoutError:
+            self.close_connection = True
+
     def do_GET(self):
         self._handle_bridge_request()
 
@@ -201,7 +219,9 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
     def _authorized(self):
         expected = f"Bearer {self.server.app.options['token']}"
         authorization = self.headers.get("Authorization")
-        return authorization is not None and hmac.compare_digest(authorization, expected)
+        if authorization is None:
+            return False
+        return hmac.compare_digest(authorization.encode("utf-8"), expected.encode("utf-8"))
 
     def _send_json(self, status, payload):
         body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
@@ -236,7 +256,7 @@ def start_server(app, host="0.0.0.0", port=9567):
 
 def start_test_server(app):
     server = start_server(app, host="127.0.0.1", port=0)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = socketserver.threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, server.server_address[1]
 
