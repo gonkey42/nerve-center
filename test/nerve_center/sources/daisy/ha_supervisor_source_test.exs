@@ -83,6 +83,25 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
   end
 
   @tag :poll
+  test "probe falls back to explicit source-level bridge config" do
+    context = %{source: source_config(1234), private: %{}}
+
+    assert {:ok, probe} = @source.probe(context)
+
+    assert probe.bridge_base_url == "http://127.0.0.1:1234"
+
+    assert probe.watched_addons == [
+             %{
+               slug: "a0d7b954_nut",
+               label: "Network UPS Tools",
+               required: true,
+               expected_states: ["started"],
+               config_checks: [:nut_addon]
+             }
+           ]
+  end
+
+  @tag :poll
   test "poll sends authorization bearer token" do
     {listener, port} = listen_socket()
 
@@ -747,6 +766,21 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
       enabled: true,
       interval_ms: 60_000
     }
+  end
+
+  defp source_config(port) do
+    Map.merge(source_metadata_config(), %{
+      supervisor_bridge_base_url: "http://127.0.0.1:#{port}",
+      supervisor_addons: [
+        %{
+          slug: "a0d7b954_nut",
+          label: "Network UPS Tools",
+          required: true,
+          expected_states: ["started"],
+          config_checks: [:nut_addon]
+        }
+      ]
+    })
   end
 
   defp addon_config(overrides) do
