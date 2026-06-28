@@ -93,6 +93,31 @@ Before marking deployment ready:
 4. Confirm no add-on logs, raw option maps, passwords, usernames, Supervisor tokens, or request headers appear in the response.
 5. Confirm NUT config is summarized as booleans and counts only.
 
+## Manual Acceptance on Daisy
+
+- [ ] Bridge add-on config contains `ports: {"9567/tcp": 9567}` and `host_network: false`.
+- [ ] Daisy's actual Home Assistant add-on architecture is recorded as `amd64`; if Daisy reports a different architecture, this commit updates both `arch` and `BUILD_FROM` and records the observed architecture.
+- [ ] The local add-on installs and starts successfully on Daisy with the committed manifest/Dockerfile.
+- [ ] If Daisy's add-on validator rejects direct `CMD` or `init: false`, the add-on has been converted to the supported S6 service layout before continuing.
+- [ ] Bridge refuses to start with a blank token.
+- [ ] Bridge starts with a random 64 hex character token from `openssl rand -hex 32`.
+- [ ] `GET /health` with a valid token returns `a0d7b954_nut`.
+- [ ] `GET /health` with an invalid token returns `401` and `{"error":"unauthorized"}`.
+- [ ] Response JSON does not contain raw `options.users[].password`.
+- [ ] `hassio_role: default` can read `/addons`, `/addons/a0d7b954_nut/info`, and `/supervisor/info`; if a broader role is committed, this README records the exact observed status code and selected role.
+- [ ] HAL9000 can reach `http://100.103.249.3:9567/health` over the trusted Tailnet path.
+- [ ] Bridge reachability is limited to the HAL9000/NerveCenter trusted Tailnet or trusted network path where HA OS/firewall controls allow it.
+- [ ] If HA OS/firewall controls cannot restrict exposure further in this environment, this README records that limitation and the compensating controls: random bridge token, read-only `GET /health`, no mutating endpoints, no add-on logs, and sanitized responses.
+
+## Acceptance After Daisy NUT Is Fixed
+
+- [ ] Bridge valid-token `/health` returns `a0d7b954_nut.state == "started"`.
+- [ ] NerveCenter `/sources/daisy/ha_supervisor` returns to `:ok`.
+- [ ] A `ha_supervisor_addon_recovered` recovery event is recorded.
+- [ ] Daisy returns to `:ok` when other Daisy sources are also `:ok`.
+- [ ] Existing `/sources/ups/nut` remains healthy.
+- [ ] `/metrics` still exports KITT UPS metrics.
+
 ## Failure Modes
 
 Missing or invalid add-on options stop startup with a sanitized configuration error.

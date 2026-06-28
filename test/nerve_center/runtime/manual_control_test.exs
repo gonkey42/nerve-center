@@ -18,13 +18,23 @@ defmodule NerveCenter.Runtime.ManualControlTest do
   alias NerveCenter.Topology
 
   @bridge_port 9567
-  @forbidden_token "fake-bridge-token-12345678901234567890"
-  @forbidden_password "fake-password-12345678901234567890"
-  @forbidden_authorization "Authorization: Bearer fake-authorization-token-12345678901234567890"
-  @forbidden_traceback "Traceback (most recent call last)"
-  @forbidden_sensitive_atom :"Authorization fake-bridge-token-12345678901234567890 fake-password-12345678901234567890 Traceback"
+  @forbidden_bridge_token "bridge-token-123456789012345678901234"
+  @forbidden_supervisor_token "supervisor-token-should-not-leak"
+  @forbidden_password "raw-nut-password-should-not-leak"
+  @forbidden_authorization "Authorization: Bearer #{@forbidden_bridge_token}"
+  @forbidden_traceback "Traceback fake bridge failure"
+  @forbidden_sensitive_atom :"Authorization bridge-token-123456789012345678901234 supervisor-token-should-not-leak raw-nut-password-should-not-leak Traceback"
+  @forbidden_body %{
+    "error" => "Unauthorized",
+    "token" => @forbidden_bridge_token,
+    "supervisor_token" => @forbidden_supervisor_token,
+    "password" => @forbidden_password,
+    "Authorization" => "Bearer #{@forbidden_bridge_token}",
+    "trace" => @forbidden_traceback
+  }
   @forbidden_bridge_body """
-  token=#{@forbidden_token}
+  token=#{@forbidden_bridge_token}
+  supervisor_token=#{@forbidden_supervisor_token}
   password=#{@forbidden_password}
   #{@forbidden_authorization}
   #{@forbidden_traceback}
@@ -265,6 +275,22 @@ defmodule NerveCenter.Runtime.ManualControlTest do
 
       assert_sanitized_everywhere(log)
     end)
+  end
+
+  test "manual refresh redacts forbidden bridge body on source failure" do
+    start_bridge_server({401, @forbidden_body})
+
+    log =
+      capture_log(fn ->
+        assert {:error, error} = ManualControl.refresh_source(:daisy, :ha_supervisor)
+        assert error == {:auth, 401, :manual_refresh_unauthorized}
+        assert_forbidden_absent(error)
+      end)
+
+    assert_forbidden_absent(log)
+    assert_forbidden_absent(AppHealth.source_state(:daisy, :ha_supervisor))
+    assert_forbidden_absent(SnapshotStore.snapshot(:daisy))
+    assert_sanitized_persistence()
   end
 
   test "repeated ha supervisor manual refresh with stable problems does not enqueue problem events" do
@@ -639,11 +665,26 @@ defmodule NerveCenter.Runtime.ManualControlTest do
     end
   end
 
+  defp assert_forbidden_absent(term) do
+    encoded = inspect(term, limit: :infinity, printable_limit: :infinity)
+
+    for forbidden <- [
+          @forbidden_bridge_token,
+          @forbidden_supervisor_token,
+          @forbidden_password,
+          "Authorization",
+          "Traceback"
+        ] do
+      refute encoded =~ forbidden
+    end
+  end
+
   defp sanitized_render(term), do: inspect(term, limit: :infinity, printable_limit: :infinity)
 
   defp forbidden_fragments do
     [
-      @forbidden_token,
+      @forbidden_bridge_token,
+      @forbidden_supervisor_token,
       @forbidden_password,
       @forbidden_authorization,
       @forbidden_traceback,

@@ -180,7 +180,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
   end
 
   defp do_publish_success(state, payload, semantic_status) do
-    observed_at = Map.get(payload, :observed_at, DateTime.utc_now())
+    observed_at = observed_at(payload)
     normalized_metrics = Catalog.normalize(Map.get(payload, :metrics, []))
     metric_map = Map.new(normalized_metrics, &{&1.metric_id, &1.metric_value})
     data = Map.get(payload, :data, %{})
@@ -244,6 +244,16 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
          last_status: semantic_status,
          last_semantic_status: semantic_status
      }}
+  end
+
+  defp observed_at(payload) do
+    case Map.get(payload, :observed_at) do
+      %DateTime{microsecond: {microsecond, _precision}} = observed_at ->
+        %{observed_at | microsecond: {microsecond, 6}}
+
+      _other ->
+        DateTime.utc_now()
+    end
   end
 
   defp stored_successful_semantic_status(source_snapshot) do

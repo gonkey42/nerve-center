@@ -3,7 +3,18 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
 
   import ExUnit.CaptureLog
 
+  alias NerveCenter.Messages.SourceSnapshotUpdated
+  alias NerveCenter.Persistence.DeviceEvent
+  alias NerveCenter.Repo
+  alias NerveCenter.Runtime.AppHealth
+  alias NerveCenter.Runtime.DeviceHub
+  alias NerveCenter.Runtime.PersistenceWriter
+  alias NerveCenter.Runtime.PollingSourceRunner
+  alias NerveCenter.Runtime.SnapshotStore
+  alias NerveCenter.Snapshot.DeviceSnapshot
   alias NerveCenter.Sources.Daisy.HASupervisorSource
+  alias NerveCenter.Topology
+
   import HASupervisorSource, only: []
 
   @source HASupervisorSource
@@ -704,6 +715,97 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     assert recovered.status == :ok
   end
 
+  test "runner persists a problem event once for a stable fingerprint" do
+    clear_persistence_writer_queues()
+    delete_ha_supervisor_events()
+
+    {listener, port} = listen_socket()
+    payload = bridge_payload(%{"addons" => [addon_payload(%{"state" => "error"})]})
+
+    server =
+      serve_requests(listener, 2, fn socket, _request ->
+        send_response(socket, {200, payload})
+      end)
+
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.source_topic(:daisy, :ha_supervisor))
+
+    runner = start_ha_supervisor_runner(port)
+
+    assert_receive %SourceSnapshotUpdated{source_snapshot: first_snapshot}, 1_000
+    assert first_snapshot.status == :error
+
+    send(runner, :poll)
+
+    assert_receive %SourceSnapshotUpdated{source_snapshot: second_snapshot}, 1_000
+    assert second_snapshot.status == :error
+
+    wait_until(fn -> count_ha_supervisor_events("ha_supervisor_addon_problem") == 1 end)
+
+    events =
+      DeviceEvent
+      |> where([event], event.device_id == "daisy" and event.source == "ha_supervisor")
+      |> Repo.all()
+
+    assert Enum.count(events, &(&1.event_type == "ha_supervisor_addon_problem")) == 1
+
+    Task.await(server)
+  end
+
+  test "runner persists recovery event when a fingerprint disappears" do
+    clear_persistence_writer_queues()
+    delete_ha_supervisor_events()
+
+    {listener, port} = listen_socket()
+
+    server =
+      serve_requests(listener, 2, fn
+        socket, request ->
+          response =
+            if String.contains?(request, "GET /health HTTP/1.1") do
+              receive do
+                {:bridge_response, payload} -> payload
+              after
+                1_000 -> flunk("bridge response was not supplied")
+              end
+            end
+
+          send_response(socket, {200, response})
+      end)
+
+    send(server.pid, {
+      :bridge_response,
+      bridge_payload(%{"addons" => [addon_payload(%{"state" => "error"})]})
+    })
+
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.source_topic(:daisy, :ha_supervisor))
+
+    runner = start_ha_supervisor_runner(port)
+
+    assert_receive %SourceSnapshotUpdated{source_snapshot: problem_snapshot}, 1_000
+    assert problem_snapshot.status == :error
+
+    send(server.pid, {:bridge_response, bridge_payload()})
+    send(runner, :poll)
+
+    assert_receive %SourceSnapshotUpdated{source_snapshot: recovered_snapshot}, 1_000
+    assert recovered_snapshot.status == :ok
+
+    wait_until(fn ->
+      count_ha_supervisor_events("ha_supervisor_addon_problem") == 1 and
+        count_ha_supervisor_events("ha_supervisor_addon_recovered") == 1
+    end)
+
+    events =
+      DeviceEvent
+      |> where([event], event.device_id == "daisy" and event.source == "ha_supervisor")
+      |> Repo.all()
+
+    assert Enum.any?(events, &(&1.event_type == "ha_supervisor_addon_problem"))
+    assert Enum.any?(events, &(&1.event_type == "ha_supervisor_addon_recovered"))
+
+    Task.await(server)
+  end
+
   defp assert_sanitized_poll_error(status, expected) do
     {listener, port} = listen_socket()
 
@@ -934,4 +1036,170 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
   defp reason_phrase(418), do: "I'm a teapot"
   defp reason_phrase(503), do: "Service Unavailable"
   defp reason_phrase(_status), do: "Error"
+
+  defp start_ha_supervisor_runner(port) do
+    device =
+      :daisy
+      |> Topology.get_device!()
+      |> Map.put(:supervisor_bridge_base_url, "http://127.0.0.1:#{port}")
+
+    previous_snapshot = SnapshotStore.snapshot(:daisy)
+    previous_hub_state = current_hub_state(:daisy)
+    previous_health = AppHealth.source_state(:daisy, :ha_supervisor)
+    suspended_runner = suspend_source_runner(:daisy, :ha_supervisor)
+
+    snapshot = %DeviceSnapshot{
+      device_id: :daisy,
+      label: "DAISY",
+      status: :unknown,
+      updated_at: nil,
+      offline_expected: false,
+      metrics: %{},
+      sources: %{}
+    }
+
+    seed_app_health(:daisy, :ha_supervisor)
+    SnapshotStore.put(snapshot)
+    seed_device_hub(device, snapshot)
+
+    on_exit(fn ->
+      resume_source_runner(suspended_runner)
+      clear_persistence_writer_queues()
+      delete_ha_supervisor_events()
+
+      if previous_snapshot do
+        SnapshotStore.put(previous_snapshot)
+      end
+
+      restore_device_hub(:daisy, previous_hub_state)
+      restore_app_health(:daisy, :ha_supervisor, previous_health)
+    end)
+
+    start_supervised!(
+      {PollingSourceRunner, module: @source, device: device, source: source_metadata_config()}
+    )
+  end
+
+  defp seed_device_hub(device, snapshot) do
+    case Registry.lookup(NerveCenter.Runtime.DeviceRegistry, device.id) do
+      [{pid, _value}] ->
+        :sys.replace_state(pid, &%{&1 | snapshot: snapshot})
+
+      [] ->
+        start_supervised!({DeviceHub, device: device})
+    end
+  end
+
+  defp current_hub_state(device_id) do
+    case Registry.lookup(NerveCenter.Runtime.DeviceRegistry, device_id) do
+      [{pid, _value}] -> {:ok, pid, :sys.get_state(pid)}
+      [] -> :missing
+    end
+  end
+
+  defp restore_device_hub(_device_id, {:ok, pid, state}) do
+    if Process.alive?(pid) do
+      :sys.replace_state(pid, fn _current -> state end)
+    end
+  end
+
+  defp restore_device_hub(_device_id, :missing), do: :ok
+
+  defp seed_app_health(device_id, source_name) do
+    restore_app_health(device_id, source_name, %{
+      device_id: device_id,
+      source: source_name,
+      last_ok_at: nil,
+      consecutive_failures: 0,
+      backoff_ms: 0,
+      last_error_at: nil,
+      last_error: nil
+    })
+  end
+
+  defp restore_app_health(device_id, source_name, source_state) do
+    :sys.replace_state(AppHealth, fn state ->
+      %{state | sources: Map.put(state.sources, {device_id, source_name}, source_state)}
+    end)
+  end
+
+  defp suspend_source_runner(device_id, source_name) do
+    case :global.whereis_name({:device_tree, device_id}) do
+      :undefined ->
+        nil
+
+      tree_pid ->
+        tree_pid
+        |> Supervisor.which_children()
+        |> Enum.find_value(fn
+          {{_module, ^device_id, ^source_name}, pid, _type, _modules} when is_pid(pid) ->
+            :sys.suspend(pid)
+            pid
+
+          _child ->
+            nil
+        end)
+    end
+  catch
+    :exit, _reason -> nil
+  end
+
+  defp resume_source_runner(nil), do: :ok
+
+  defp resume_source_runner(pid) when is_pid(pid) do
+    if Process.alive?(pid) do
+      :sys.resume(pid)
+    end
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp clear_persistence_writer_queues do
+    :sys.replace_state(PersistenceWriter, fn state ->
+      %{
+        state
+        | samples: [],
+          sample_count: 0,
+          events: [],
+          event_count: 0,
+          probes: [],
+          probe_count: 0
+      }
+    end)
+  end
+
+  defp delete_ha_supervisor_events do
+    Repo.delete_all(
+      from event in DeviceEvent,
+        where: event.device_id == "daisy" and event.source == "ha_supervisor"
+    )
+  end
+
+  defp count_ha_supervisor_events(event_type) do
+    DeviceEvent
+    |> where(
+      [event],
+      event.device_id == "daisy" and event.source == "ha_supervisor" and
+        event.event_type == ^event_type
+    )
+    |> Repo.aggregate(:count, :id)
+  end
+
+  defp wait_until(fun, timeout_ms \\ 1_500) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until(fun, deadline)
+  end
+
+  defp do_wait_until(fun, deadline) do
+    if fun.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("condition was not met before timeout")
+      else
+        Process.sleep(25)
+        do_wait_until(fun, deadline)
+      end
+    end
+  end
 end

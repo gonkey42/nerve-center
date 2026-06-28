@@ -1,11 +1,14 @@
 defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
-  use ExUnit.Case, async: false
+  use NerveCenter.DataCase, async: false
 
   import ExUnit.CaptureLog
 
   alias NerveCenter.Messages.AppHealthUpdated
   alias NerveCenter.Messages.DeviceSnapshotUpdated
   alias NerveCenter.Messages.SourceSnapshotUpdated
+  alias NerveCenter.Persistence.DeviceEvent
+  alias NerveCenter.Persistence.SourceProbe
+  alias NerveCenter.Repo
   alias NerveCenter.Runtime.AppHealth
   alias NerveCenter.Runtime.DeviceHub
   alias NerveCenter.Runtime.PersistenceWriter
@@ -13,7 +16,21 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
   alias NerveCenter.Runtime.SnapshotStore
   alias NerveCenter.Snapshot.DeviceSnapshot
   alias NerveCenter.Snapshot.SourceSnapshot
+  alias NerveCenter.Sources.Daisy.HASupervisorSource
   alias NerveCenter.Topology
+
+  @bridge_token "test-daisy-supervisor-bridge-token-123456"
+  @forbidden_bridge_token "bridge-token-123456789012345678901234"
+  @forbidden_supervisor_token "supervisor-token-should-not-leak"
+  @forbidden_password "raw-nut-password-should-not-leak"
+  @forbidden_body %{
+    "error" => "Unauthorized",
+    "token" => @forbidden_bridge_token,
+    "supervisor_token" => @forbidden_supervisor_token,
+    "password" => @forbidden_password,
+    "Authorization" => "Bearer #{@forbidden_bridge_token}",
+    "trace" => "Traceback fake bridge failure"
+  }
 
   defmodule FakeOfflineAwareSource do
     use NerveCenter.Runtime.PollingSource
@@ -261,6 +278,89 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
     assert log =~ "polling source #{device.id}/#{source_name} entered unknown"
     assert log =~ "reason={:request, \"timeout\"}"
     assert log =~ "recovered after 1 failures"
+  end
+
+  test "captured source failure logs do not include raw bridge response bodies" do
+    device = test_device(%{offline_expected: false})
+    source_name = :ha_supervisor
+
+    seed_app_health(device.id, source_name)
+    seed_snapshot(device)
+    start_device_hub(device)
+
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.source_topic(device.id, source_name))
+
+    responses = start_script([{:error, {:auth, 401, :supervisor_bridge_unauthorized}}])
+
+    log =
+      capture_log([level: :warning], fn ->
+        start_semantic_runner(device, source_name, responses)
+
+        assert_receive %SourceSnapshotUpdated{source_snapshot: failed_snapshot}, 1_000
+        assert failed_snapshot.status == :unknown
+      end)
+
+    assert log =~ "supervisor_bridge_unauthorized"
+    assert_forbidden_absent(log)
+  end
+
+  test "runner redacts forbidden bridge body from source failure surfaces" do
+    clear_persistence_writer_queues()
+    delete_ha_supervisor_rows()
+    set_bridge_token()
+
+    {listener, port} = listen_socket()
+
+    server =
+      serve_requests(listener, 1, fn socket, _request ->
+        send_response(socket, {401, @forbidden_body})
+      end)
+
+    device = daisy_device(port)
+    prepare_daisy_runtime(device)
+
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.source_topic(:daisy, :ha_supervisor))
+
+    log =
+      capture_log([level: :warning], fn ->
+        start_supervised!(
+          {PollingSourceRunner,
+           module: HASupervisorSource, device: device, source: daisy_supervisor_source()}
+        )
+
+        assert_receive %SourceSnapshotUpdated{source_snapshot: failed_snapshot}, 1_000
+        assert failed_snapshot.status == :unknown
+        assert failed_snapshot.last_error == "{:auth, 401, :supervisor_bridge_unauthorized}"
+        assert_forbidden_absent(failed_snapshot.last_error)
+        assert_forbidden_absent(failed_snapshot.probe_data)
+        assert_forbidden_absent(failed_snapshot.data)
+      end)
+
+    assert log =~ "supervisor_bridge_unauthorized"
+    assert_forbidden_absent(log)
+
+    wait_until(fn ->
+      AppHealth.source_state(:daisy, :ha_supervisor).last_error ==
+        "{:auth, 401, :supervisor_bridge_unauthorized}"
+    end)
+
+    assert_forbidden_absent(AppHealth.source_state(:daisy, :ha_supervisor))
+
+    wait_until(fn -> persisted_probe_count() >= 1 and persistence_queue_empty?() end)
+
+    persisted_rows =
+      Repo.all(
+        from event in DeviceEvent,
+          where: event.device_id == "daisy" and event.source == "ha_supervisor"
+      ) ++
+        Repo.all(
+          from probe in SourceProbe,
+            where: probe.device_id == "daisy" and probe.source == "ha_supervisor"
+        )
+
+    assert_forbidden_absent(persisted_rows)
+
+    Task.await(server)
   end
 
   test "successful payload without status still publishes ok" do
@@ -882,5 +982,255 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
     |> String.split(needle)
     |> length()
     |> Kernel.-(1)
+  end
+
+  defp daisy_device(port) do
+    :daisy
+    |> Topology.get_device!()
+    |> Map.put(:supervisor_bridge_base_url, "http://127.0.0.1:#{port}")
+  end
+
+  defp daisy_supervisor_source do
+    Topology.get_source!(:daisy, :ha_supervisor)
+  end
+
+  defp prepare_daisy_runtime(device) do
+    previous_snapshot = SnapshotStore.snapshot(:daisy)
+    previous_hub_state = current_hub_state(:daisy)
+    previous_health = AppHealth.source_state(:daisy, :ha_supervisor)
+    suspended_runner = suspend_source_runner(:daisy, :ha_supervisor)
+
+    snapshot = %DeviceSnapshot{
+      device_id: :daisy,
+      label: "DAISY",
+      status: :unknown,
+      updated_at: nil,
+      offline_expected: false,
+      metrics: %{},
+      sources: %{}
+    }
+
+    restore_app_health(:daisy, :ha_supervisor, %{
+      device_id: :daisy,
+      source: :ha_supervisor,
+      last_ok_at: nil,
+      consecutive_failures: 0,
+      backoff_ms: 0,
+      last_error_at: nil,
+      last_error: nil
+    })
+
+    SnapshotStore.put(snapshot)
+    seed_device_hub(device, snapshot)
+
+    on_exit(fn ->
+      resume_source_runner(suspended_runner)
+      clear_persistence_writer_queues()
+      delete_ha_supervisor_rows()
+
+      if previous_snapshot do
+        SnapshotStore.put(previous_snapshot)
+      end
+
+      restore_device_hub(:daisy, previous_hub_state)
+      restore_app_health(:daisy, :ha_supervisor, previous_health)
+    end)
+  end
+
+  defp seed_device_hub(device, snapshot) do
+    case Registry.lookup(NerveCenter.Runtime.DeviceRegistry, device.id) do
+      [{pid, _value}] ->
+        :sys.replace_state(pid, &%{&1 | snapshot: snapshot})
+
+      [] ->
+        start_supervised!({DeviceHub, device: device})
+    end
+  end
+
+  defp current_hub_state(device_id) do
+    case Registry.lookup(NerveCenter.Runtime.DeviceRegistry, device_id) do
+      [{pid, _value}] -> {:ok, pid, :sys.get_state(pid)}
+      [] -> :missing
+    end
+  end
+
+  defp restore_device_hub(_device_id, {:ok, pid, state}) do
+    if Process.alive?(pid) do
+      :sys.replace_state(pid, fn _current -> state end)
+    end
+  end
+
+  defp restore_device_hub(_device_id, :missing), do: :ok
+
+  defp restore_app_health(device_id, source_name, source_state) do
+    :sys.replace_state(AppHealth, fn state ->
+      %{state | sources: Map.put(state.sources, {device_id, source_name}, source_state)}
+    end)
+  end
+
+  defp suspend_source_runner(device_id, source_name) do
+    case :global.whereis_name({:device_tree, device_id}) do
+      :undefined ->
+        nil
+
+      tree_pid ->
+        tree_pid
+        |> Supervisor.which_children()
+        |> Enum.find_value(fn
+          {{_module, ^device_id, ^source_name}, pid, _type, _modules} when is_pid(pid) ->
+            :sys.suspend(pid)
+            pid
+
+          _child ->
+            nil
+        end)
+    end
+  catch
+    :exit, _reason -> nil
+  end
+
+  defp resume_source_runner(nil), do: :ok
+
+  defp resume_source_runner(pid) when is_pid(pid) do
+    if Process.alive?(pid) do
+      :sys.resume(pid)
+    end
+  catch
+    :exit, _reason -> :ok
+  end
+
+  defp set_bridge_token do
+    previous = System.get_env("DAISY_SUPERVISOR_BRIDGE_TOKEN")
+    System.put_env("DAISY_SUPERVISOR_BRIDGE_TOKEN", @bridge_token)
+
+    on_exit(fn ->
+      if is_nil(previous) do
+        System.delete_env("DAISY_SUPERVISOR_BRIDGE_TOKEN")
+      else
+        System.put_env("DAISY_SUPERVISOR_BRIDGE_TOKEN", previous)
+      end
+    end)
+  end
+
+  defp delete_ha_supervisor_rows do
+    Repo.delete_all(
+      from event in DeviceEvent,
+        where: event.device_id == "daisy" and event.source == "ha_supervisor"
+    )
+
+    Repo.delete_all(
+      from probe in SourceProbe,
+        where: probe.device_id == "daisy" and probe.source == "ha_supervisor"
+    )
+  end
+
+  defp persisted_probe_count do
+    SourceProbe
+    |> where([probe], probe.device_id == "daisy" and probe.source == "ha_supervisor")
+    |> Repo.aggregate(:count, :id)
+  end
+
+  defp persistence_queue_empty? do
+    state = :sys.get_state(PersistenceWriter)
+    state.sample_count == 0 and state.event_count == 0 and state.probe_count == 0
+  end
+
+  defp assert_forbidden_absent(term) do
+    encoded = inspect(term, limit: :infinity, printable_limit: :infinity)
+
+    for forbidden <- [
+          @forbidden_bridge_token,
+          @forbidden_supervisor_token,
+          @forbidden_password,
+          "Authorization",
+          "Traceback"
+        ] do
+      refute encoded =~ forbidden
+    end
+  end
+
+  defp listen_socket do
+    {:ok, listener} =
+      :gen_tcp.listen(0, [
+        :binary,
+        active: false,
+        packet: :raw,
+        reuseaddr: true,
+        ip: {127, 0, 0, 1}
+      ])
+
+    {:ok, {{127, 0, 0, 1}, port}} = :inet.sockname(listener)
+    {listener, port}
+  end
+
+  defp serve_requests(listener, count, handler) do
+    Task.async(fn ->
+      try do
+        Enum.each(1..count, fn _index ->
+          {:ok, socket} = :gen_tcp.accept(listener)
+          request = recv_http_request(socket)
+          handler.(socket, request)
+          :ok = :gen_tcp.close(socket)
+        end)
+      after
+        :gen_tcp.close(listener)
+      end
+    end)
+  end
+
+  defp recv_http_request(socket), do: recv_http_request(socket, "")
+
+  defp recv_http_request(socket, acc) do
+    case :gen_tcp.recv(socket, 0, 1_000) do
+      {:ok, chunk} ->
+        request = acc <> chunk
+
+        if String.contains?(request, "\r\n\r\n") do
+          request
+        else
+          recv_http_request(socket, request)
+        end
+
+      {:error, reason} ->
+        flunk("failed to receive HTTP request: #{inspect(reason)}")
+    end
+  end
+
+  defp send_response(socket, {status, body}) do
+    payload = Jason.encode!(body)
+
+    :ok =
+      :gen_tcp.send(socket, [
+        "HTTP/1.1 #{status} #{reason_phrase(status)}\r\n",
+        "content-type: application/json\r\n",
+        "content-length: #{byte_size(payload)}\r\n",
+        "connection: close\r\n",
+        "\r\n",
+        payload
+      ])
+  end
+
+  defp reason_phrase(200), do: "OK"
+  defp reason_phrase(401), do: "Unauthorized"
+  defp reason_phrase(403), do: "Forbidden"
+  defp reason_phrase(503), do: "Service Unavailable"
+  defp reason_phrase(_status), do: "Error"
+
+  defp wait_until(fun, timeout_ms \\ 1_500) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until(fun, deadline)
+  end
+
+  defp do_wait_until(fun, deadline) do
+    if fun.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("condition was not met before timeout")
+      else
+        Process.sleep(25)
+        do_wait_until(fun, deadline)
+      end
+    end
   end
 end
