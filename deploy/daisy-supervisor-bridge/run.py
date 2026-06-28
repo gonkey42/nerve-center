@@ -153,8 +153,6 @@ def build_health_payload(supervisor, watched_addons):
         overview = addon_overviews.get(slug, {})
         try:
             addon_info = _require_object(supervisor.addon_info(slug))
-        except SupervisorMalformedError:
-            raise
         except SupervisorError:
             addon_payloads.append(_unavailable_addon(slug))
             continue
@@ -170,8 +168,8 @@ def build_health_payload(supervisor, watched_addons):
 
 def sanitize_supervisor_info(raw):
     sanitized = {
-        "healthy": bool(raw.get("healthy")),
-        "supported": bool(raw.get("supported")),
+        "healthy": _bool_or_false(raw.get("healthy")),
+        "supported": _bool_or_false(raw.get("supported")),
         "version": _string_or_none(raw.get("version")),
     }
     if "arch" in raw:
@@ -213,7 +211,11 @@ def sanitize_nut_config(options, network):
     username_blank = False
     password_blank = False
 
-    for raw_user in options.get("users", []):
+    raw_users = options.get("users")
+    if not isinstance(raw_users, list):
+        raw_users = []
+
+    for raw_user in raw_users:
         if not isinstance(raw_user, dict):
             continue
 
@@ -228,6 +230,10 @@ def sanitize_nut_config(options, network):
                 "upsmon": _safe_upsmon(raw_user.get("upsmon")),
             }
         )
+
+    if not users:
+        username_blank = True
+        password_blank = True
 
     if username_blank:
         warnings.append(problem("nut_username_blank", "critical", "NUT user username is blank."))
@@ -310,6 +316,13 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         return
+
+    def send_error(self, code, message=None, explain=None):
+        self.request_version = "HTTP/1.1"
+        if not hasattr(self, "command"):
+            self.command = ""
+        error = "request_too_large" if code == 414 else "bad_request"
+        self._send_json(code, {"error": error})
 
     def _safe_handle_bridge_request(self):
         try:
@@ -451,9 +464,9 @@ def _unavailable_addon(slug):
 
 
 def _string_or_none(value):
-    if value is None:
-        return None
-    return str(value)
+    if isinstance(value, str):
+        return value
+    return None
 
 
 def _first_string(*values):
@@ -476,8 +489,14 @@ def _bool_or_none(value):
     return None
 
 
+def _bool_or_false(value):
+    if isinstance(value, bool):
+        return value
+    return False
+
+
 def _non_empty_string(value):
-    return isinstance(value, str) and value != ""
+    return isinstance(value, str) and value.strip() != ""
 
 
 def _safe_upsmon(value):
