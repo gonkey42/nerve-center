@@ -60,7 +60,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
         data: Map.get(source_snapshot, :data, %{})
       },
       last_status: Map.get(source_snapshot, :status, :unknown),
-      last_semantic_status: nil
+      last_semantic_status: stored_successful_semantic_status(source_snapshot)
     }
 
     {:ok, state, {:continue, :bootstrap}}
@@ -248,12 +248,30 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
   end
 
   defp semantic_status(payload) do
-    semantic_status = Map.get(payload, :status) || :ok
+    case Map.fetch(payload, :status) do
+      :error ->
+        {:ok, :ok}
 
-    if semantic_status in @allowed_semantic_statuses do
-      {:ok, semantic_status}
+      {:ok, nil} ->
+        {:ok, :ok}
+
+      {:ok, semantic_status} ->
+        if semantic_status in @allowed_semantic_statuses do
+          {:ok, semantic_status}
+        else
+          {:error, {:invalid_callback_payload, :invalid_semantic_status}}
+        end
+    end
+  end
+
+  defp stored_successful_semantic_status(source_snapshot) do
+    status = Map.get(source_snapshot, :status)
+
+    if status in @allowed_semantic_statuses and is_nil(Map.get(source_snapshot, :last_error)) and
+         is_nil(Map.get(source_snapshot, :last_error_at)) do
+      status
     else
-      {:error, {:invalid_callback_payload, :invalid_semantic_status}}
+      nil
     end
   end
 

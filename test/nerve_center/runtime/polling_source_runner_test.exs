@@ -8,12 +8,12 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
   alias NerveCenter.Messages.SourceSnapshotUpdated
   alias NerveCenter.Runtime.AppHealth
   alias NerveCenter.Runtime.DeviceHub
+  alias NerveCenter.Runtime.PersistenceWriter
   alias NerveCenter.Runtime.PollingSourceRunner
   alias NerveCenter.Runtime.SnapshotStore
   alias NerveCenter.Snapshot.DeviceSnapshot
+  alias NerveCenter.Snapshot.SourceSnapshot
   alias NerveCenter.Topology
-
-  require Logger
 
   defmodule FakeOfflineAwareSource do
     use NerveCenter.Runtime.PollingSource
@@ -363,28 +363,113 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
         {:ok,
          %{
            status: :maintenance,
+           metrics: [%{metric: :cpu_util_ratio, value: 0.99}],
+           events: [%{event_type: :invalid_semantic_status, message: "bad event"}],
+           private: %{secret: "invalid private"},
            data: %{summary: %{message: "bad status"}}
          }}
       ])
 
-    start_semantic_runner(device, source_name, responses)
+    clear_persistence_writer_queues()
+    on_exit(&clear_persistence_writer_queues/0)
 
-    assert_receive %SourceSnapshotUpdated{source_snapshot: source_snapshot}, 1_000
-    assert source_snapshot.status == :unknown
-    refute source_snapshot.status == :maintenance
-    assert source_snapshot.last_error == "{:invalid_callback_payload, :invalid_semantic_status}"
-    refute source_snapshot.last_error =~ "maintenance"
-    refute source_snapshot.last_error =~ "bad status"
-    assert source_snapshot.data == %{}
+    log =
+      capture_log([level: :warning], fn ->
+        runner = start_semantic_runner(device, source_name, responses)
 
-    assert_receive %DeviceSnapshotUpdated{snapshot: device_snapshot}, 1_000
-    refute device_snapshot.sources[source_name].status == :maintenance
-    assert SnapshotStore.snapshot(device.id).sources[source_name].status == :unknown
+        assert_receive %SourceSnapshotUpdated{source_snapshot: source_snapshot}, 1_000
+        assert source_snapshot.status == :unknown
+        refute source_snapshot.status == :maintenance
 
-    assert_receive %AppHealthUpdated{}, 1_000
+        assert source_snapshot.last_error ==
+                 "{:invalid_callback_payload, :invalid_semantic_status}"
+
+        refute source_snapshot.last_error =~ "maintenance"
+        refute source_snapshot.last_error =~ "bad status"
+        assert source_snapshot.data == %{}
+        assert source_snapshot.metrics == %{}
+        assert :sys.get_state(runner).private == %{}
+
+        assert_receive %DeviceSnapshotUpdated{snapshot: device_snapshot}, 1_000
+        refute device_snapshot.sources[source_name].status == :maintenance
+        assert SnapshotStore.snapshot(device.id).sources[source_name].status == :unknown
+
+        assert_receive %AppHealthUpdated{}, 1_000
+      end)
+
+    refute log =~ "maintenance"
+    refute log =~ "bad status"
+    refute log =~ "bad event"
+    refute log =~ "invalid private"
+
     health = AppHealth.source_state(device.id, source_name)
     assert health.consecutive_failures == 1
     assert health.last_error == "{:invalid_callback_payload, :invalid_semantic_status}"
+
+    writer_state = :sys.get_state(PersistenceWriter)
+    assert writer_state.sample_count == 0
+    assert writer_state.event_count == 0
+  end
+
+  test "false semantic status is rejected without publishing or persisting invalid payload data" do
+    device = test_device(%{offline_expected: false})
+    source_name = :ha_supervisor
+
+    seed_app_health(device.id, source_name)
+    seed_snapshot(device)
+    start_device_hub(device)
+
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.app_health_topic())
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.device_topic(device.id))
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.source_topic(device.id, source_name))
+
+    responses =
+      start_script([
+        {:ok,
+         %{
+           status: false,
+           metrics: [%{metric: :cpu_util_ratio, value: 0.77}],
+           events: [%{event_type: :invalid_false_status, message: "false-status event"}],
+           private: %{token: "false-status private"},
+           data: %{summary: %{message: "false-status data"}}
+         }}
+      ])
+
+    clear_persistence_writer_queues()
+    on_exit(&clear_persistence_writer_queues/0)
+
+    log =
+      capture_log([level: :warning], fn ->
+        runner = start_semantic_runner(device, source_name, responses)
+
+        assert_receive %SourceSnapshotUpdated{source_snapshot: source_snapshot}, 1_000
+        assert source_snapshot.status == :unknown
+        refute source_snapshot.status == false
+
+        assert source_snapshot.last_error ==
+                 "{:invalid_callback_payload, :invalid_semantic_status}"
+
+        refute source_snapshot.last_error =~ "false-status"
+        assert source_snapshot.data == %{}
+        assert source_snapshot.metrics == %{}
+        assert :sys.get_state(runner).private == %{}
+
+        assert_receive %DeviceSnapshotUpdated{snapshot: device_snapshot}, 1_000
+        refute device_snapshot.sources[source_name].status == false
+        assert SnapshotStore.snapshot(device.id).sources[source_name].status == :unknown
+
+        assert_receive %AppHealthUpdated{}, 1_000
+      end)
+
+    refute log =~ "false-status"
+
+    health = AppHealth.source_state(device.id, source_name)
+    assert health.consecutive_failures == 1
+    assert health.last_error == "{:invalid_callback_payload, :invalid_semantic_status}"
+
+    writer_state = :sys.get_state(PersistenceWriter)
+    assert writer_state.sample_count == 0
+    assert writer_state.event_count == 0
   end
 
   test "successful semantic error publishes error without source failure" do
@@ -657,6 +742,57 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
     refute log =~ "communication recovered"
   end
 
+  test "semantic recovery after restart logs from stored successful non-ok semantic status" do
+    device = test_device(%{offline_expected: false})
+    source_name = :ha_supervisor
+    previous_level = Application.get_env(:logger, :level, :warning)
+    observed_at = DateTime.utc_now()
+
+    seed_app_health(device.id, source_name)
+
+    seed_snapshot(device, %{
+      source_name => %SourceSnapshot{
+        device_id: device.id,
+        source: source_name,
+        status: :degraded,
+        observed_at: observed_at,
+        last_ok_at: observed_at,
+        last_error_at: nil,
+        last_error: nil,
+        probe_data: %{ok: true, data: %{mode: "semantic-test"}},
+        consecutive_failures: 0,
+        backoff_ms: 0,
+        ever_ok?: true,
+        metrics: %{},
+        data: %{summary: %{message: "stored degraded"}}
+      }
+    })
+
+    start_device_hub(device)
+
+    Logger.configure(level: :info)
+    on_exit(fn -> Logger.configure(level: previous_level) end)
+
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.source_topic(device.id, source_name))
+
+    responses =
+      start_script([
+        {:ok, %{status: :ok, data: %{summary: %{message: "recovered after restart"}}}}
+      ])
+
+    log =
+      capture_log([level: :info], fn ->
+        start_semantic_runner(device, source_name, responses)
+
+        assert_receive %SourceSnapshotUpdated{source_snapshot: source_snapshot}, 1_000
+        assert source_snapshot.status == :ok
+        assert source_snapshot.data.summary.message == "recovered after restart"
+      end)
+
+    assert log =~ "semantic status recovered to ok"
+    refute log =~ "communication recovered"
+  end
+
   defp test_device(overrides \\ %{}) do
     id = Map.get(overrides, :id, :"phase3_test_laptop_#{System.unique_integer([:positive])}")
 
@@ -672,7 +808,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
     )
   end
 
-  defp seed_snapshot(device) do
+  defp seed_snapshot(device, sources \\ %{}) do
     SnapshotStore.put(%DeviceSnapshot{
       device_id: device.id,
       label: device.label,
@@ -680,7 +816,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
       updated_at: nil,
       offline_expected: device.offline_expected,
       metrics: %{},
-      sources: %{}
+      sources: sources
     })
   end
 
@@ -725,6 +861,12 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
     {Agent, fn -> responses end}
     |> Supervisor.child_spec(id: {Agent, make_ref()})
     |> start_supervised!()
+  end
+
+  defp clear_persistence_writer_queues do
+    :sys.replace_state(PersistenceWriter, fn state ->
+      %{state | samples: [], sample_count: 0, events: [], event_count: 0}
+    end)
   end
 
   defp count_occurrences(haystack, needle) do
