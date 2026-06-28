@@ -14,6 +14,11 @@ defmodule NerveCenter.Runtime.FailureReasonTest do
         "access_token" => @opaque_secret,
         "bridge-token" => @opaque_secret,
         :api_token => @opaque_secret,
+        "apiKey" => @opaque_secret,
+        "client_secret" => @opaque_secret,
+        "secret" => @opaque_secret,
+        "private-key" => @opaque_secret,
+        "private_key" => @opaque_secret,
         "Authorization" => @opaque_secret,
         "password" => @opaque_secret,
         "Traceback" => @opaque_secret
@@ -29,7 +34,7 @@ defmodule NerveCenter.Runtime.FailureReasonTest do
     sanitized =
       FailureReason.sanitize(%{
         {:apiToken, :tuple_key} => @opaque_secret,
-        {:ordinary, :tuple_key} => "safe value"
+        {:ordinary, :field} => "safe value"
       })
 
     encoded = inspect(sanitized, limit: :infinity, printable_limit: :infinity)

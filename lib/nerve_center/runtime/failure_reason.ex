@@ -74,7 +74,7 @@ defmodule NerveCenter.Runtime.FailureReason do
   defp sensitive_key?(key) do
     normalized = normalize_key(key)
 
-    Enum.any?(["authorization", "password", "token", "traceback"], fn marker ->
+    Enum.any?(["authorization", "password", "token", "traceback", "key", "secret"], fn marker ->
       String.contains?(normalized, marker)
     end)
   end
