@@ -93,5 +93,4 @@ defmodule NerveCenter.Metrics.Exporter do
     |> String.trim_trailing(".")
   end
 
-  defp format_value(value) when is_number(value), do: to_string(value)
 end
