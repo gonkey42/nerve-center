@@ -72,7 +72,6 @@ defmodule NerveCenter.Runtime.ManualControlTest do
     seed_device_hub(device, snapshot)
 
     on_exit(fn ->
-      Application.delete_env(:nerve_center, :manual_control_source_overrides)
       stop_bridge_server()
       resume_source_runner(suspended_runner)
       clear_persistence_writer_queues()
@@ -103,8 +102,48 @@ defmodule NerveCenter.Runtime.ManualControlTest do
     assert published.status == :error
   end
 
+  test "refresh_source ignores runtime source overrides and uses compiled topology source" do
+    start_bridge_server({200, bridge_payload(addon_payload(%{"state" => "error"}))})
+
+    test_pid =
+      {Agent, fn -> {:ok, %{status: :ok, data: %{summary: %{message: "override used"}}}} end}
+      |> Supervisor.child_spec(id: {Agent, make_ref()})
+      |> start_supervised!()
+
+    Application.put_env(:nerve_center, :manual_control_source_overrides, %{
+      {:daisy, :ha_supervisor} => %{
+        name: :ha_supervisor,
+        module: FakeManualSource,
+        enabled: true,
+        interval_ms: 60_000,
+        test_pid: test_pid
+      }
+    })
+
+    on_exit(fn -> Application.delete_env(:nerve_center, :manual_control_source_overrides) end)
+
+    assert {:ok, snapshot} = ManualControl.refresh_source(:daisy, :ha_supervisor)
+    assert snapshot.status == :error
+    assert snapshot.data.summary.message == "Network UPS Tools add-on is error."
+  end
+
+  test "refresh_source preserves semantic statuses emitted by real ha supervisor source" do
+    cases = [
+      {:ok, bridge_payload(addon_payload(%{}))},
+      {:degraded, bridge_payload(addon_payload(%{}), %{"supported" => false})},
+      {:error, bridge_payload(addon_payload(%{"state" => "error"}))}
+    ]
+
+    Enum.each(cases, fn {status, payload} ->
+      start_bridge_server({200, payload})
+
+      assert {:ok, snapshot} = ManualControl.refresh_source(:daisy, :ha_supervisor)
+      assert snapshot.status == status
+    end)
+  end
+
   test "refresh_source defaults missing status to ok" do
-    with_fake_manual_source({:ok, %{data: %{summary: %{message: "missing status"}}}}, fn ->
+    with_fake_ha_supervisor_source({:ok, %{data: %{summary: %{message: "missing status"}}}}, fn ->
       assert {:ok, snapshot} = ManualControl.refresh_source(:daisy, :ha_supervisor)
       assert snapshot.status == :ok
       assert snapshot.data.summary.message == "missing status"
@@ -112,7 +151,7 @@ defmodule NerveCenter.Runtime.ManualControlTest do
   end
 
   test "refresh_source defaults nil status to ok" do
-    with_fake_manual_source(
+    with_fake_ha_supervisor_source(
       {:ok, %{status: nil, data: %{summary: %{message: "nil status"}}}},
       fn ->
         assert {:ok, snapshot} = ManualControl.refresh_source(:daisy, :ha_supervisor)
@@ -126,7 +165,7 @@ defmodule NerveCenter.Runtime.ManualControlTest do
     allowed_statuses = [:ok, :degraded, :error, :offline, :stale, :unknown]
 
     Enum.each(allowed_statuses, fn status ->
-      with_fake_manual_source(
+      with_fake_ha_supervisor_source(
         {:ok, %{status: status, data: %{summary: %{message: Atom.to_string(status)}}}},
         fn ->
           assert {:ok, snapshot} = ManualControl.refresh_source(:daisy, :ha_supervisor)
@@ -138,12 +177,12 @@ defmodule NerveCenter.Runtime.ManualControlTest do
   end
 
   test "refresh_source returns sanitized error tuple on callback error" do
+    stop_bridge_server()
+
     log =
       capture_log(fn ->
-        with_fake_manual_source({:error, {:request, @forbidden_bridge_body}}, fn ->
-          assert {:error, {:request, :failed}} =
-                   ManualControl.refresh_source(:daisy, :ha_supervisor)
-        end)
+        assert {:error, {:request, :failed}} =
+                 ManualControl.refresh_source(:daisy, :ha_supervisor)
       end)
 
     assert_sanitized_everywhere(log)
@@ -152,7 +191,7 @@ defmodule NerveCenter.Runtime.ManualControlTest do
   test "refresh_source rejects invalid semantic status without publishing it" do
     Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.source_topic(:daisy, :ha_supervisor))
 
-    with_fake_manual_source(
+    with_fake_ha_supervisor_source(
       {:ok, %{status: :maintenance, data: %{summary: %{message: "bad status"}}}},
       fn ->
         assert {:error, {:invalid_callback_payload, :invalid_semantic_status}} =
@@ -172,7 +211,7 @@ defmodule NerveCenter.Runtime.ManualControlTest do
   test "refresh_source sanitizes exception messages containing forbidden bridge body strings" do
     log =
       capture_log(fn ->
-        with_fake_manual_source({:ok, @forbidden_bridge_body}, fn ->
+        with_fake_ha_supervisor_source({:raise, @forbidden_bridge_body}, fn ->
           assert {:error, {:manual_refresh_failed, :exception}} =
                    ManualControl.refresh_source(:daisy, :ha_supervisor)
         end)
@@ -184,7 +223,7 @@ defmodule NerveCenter.Runtime.ManualControlTest do
   test "refresh_source sanitizes invalid callback returns containing forbidden bridge body strings" do
     log =
       capture_log(fn ->
-        with_fake_manual_source({:invalid_callback_return, @forbidden_bridge_body}, fn ->
+        with_fake_ha_supervisor_source({:invalid_callback_return, @forbidden_bridge_body}, fn ->
           assert {:error, {:invalid_callback_payload, :invalid_return}} =
                    ManualControl.refresh_source(:daisy, :ha_supervisor)
         end)
@@ -195,18 +234,16 @@ defmodule NerveCenter.Runtime.ManualControlTest do
 
   test "refresh_source sanitizes raw auth and http tuples without raw bridge bodies" do
     cases = [
-      {{:error, {:auth, 403, @forbidden_bridge_body}},
-       {:auth, 403, :manual_refresh_unauthorized}},
-      {{:error, {:http, 503, @forbidden_bridge_body}}, {:http, 503, :manual_refresh_http_error}}
+      {403, {:auth, 403, :manual_refresh_unauthorized}},
+      {503, {:http, 503, :manual_refresh_http_error}}
     ]
 
-    Enum.each(cases, fn {callback_return, expected_error} ->
+    Enum.each(cases, fn {status, expected_error} ->
+      start_bridge_server({status, %{"error" => @forbidden_bridge_body}})
+
       log =
         capture_log(fn ->
-          with_fake_manual_source(callback_return, fn ->
-            assert {:error, ^expected_error} =
-                     ManualControl.refresh_source(:daisy, :ha_supervisor)
-          end)
+          assert {:error, ^expected_error} = ManualControl.refresh_source(:daisy, :ha_supervisor)
         end)
 
       assert_sanitized_everywhere(log)
@@ -227,28 +264,52 @@ defmodule NerveCenter.Runtime.ManualControlTest do
     assert count_ha_supervisor_events() == 0
   end
 
-  defp with_fake_manual_source(callback_return, fun) do
-    test_pid =
-      {Agent, fn -> callback_return end}
-      |> Supervisor.child_spec(id: {Agent, make_ref()})
-      |> start_supervised!()
-
-    source = %{
-      name: :ha_supervisor,
-      module: FakeManualSource,
-      enabled: true,
-      interval_ms: 60_000,
-      test_pid: test_pid
-    }
-
-    Application.put_env(:nerve_center, :manual_control_source_overrides, %{
-      {:daisy, :ha_supervisor} => source
-    })
+  defp with_fake_ha_supervisor_source(callback_return, fun) do
+    module = NerveCenter.Sources.Daisy.HASupervisorSource
+    {^module, original_binary, original_filename} = :code.get_object_code(module)
+    previous_conflict_option = Code.compiler_options().ignore_module_conflict
 
     try do
+      Process.put(:manual_control_fake_source_response, callback_return)
+      Code.compiler_options(ignore_module_conflict: true)
+      :code.purge(module)
+      :code.delete(module)
+      Code.compile_quoted(fake_ha_supervisor_source_quote())
       fun.()
     after
-      Application.delete_env(:nerve_center, :manual_control_source_overrides)
+      Process.delete(:manual_control_fake_source_response)
+      :code.purge(module)
+      :code.delete(module)
+      {:module, ^module} = :code.load_binary(module, original_filename, original_binary)
+      Code.compiler_options(ignore_module_conflict: previous_conflict_option)
+    end
+  end
+
+  defp fake_ha_supervisor_source_quote do
+    quote do
+      defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
+        use NerveCenter.Runtime.PollingSource
+
+        @impl true
+        def required_env, do: []
+        @impl true
+        def normal_interval_ms, do: 60_000
+        @impl true
+        def stale_after_ms, do: 180_000
+        @impl true
+        def probe(_context), do: {:ok, %{mode: "manual"}}
+
+        @impl true
+        def poll(_context) do
+          case Process.get(:manual_control_fake_source_response) do
+            {:raise, message} -> raise message
+            other -> other
+          end
+        end
+
+        @impl true
+        def normalize(raw, _context), do: {:ok, raw}
+      end
     end
   end
 
@@ -331,17 +392,19 @@ defmodule NerveCenter.Runtime.ManualControlTest do
       ])
   end
 
-  defp bridge_payload(addon) do
+  defp bridge_payload(addon, supervisor_overrides \\ %{}) do
     %{
       "observed_at" => DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
-      "supervisor" => %{
-        "version" => "2026.06.2",
-        "version_latest" => "2026.06.2",
-        "update_available" => false,
-        "healthy" => true,
-        "supported" => true,
-        "channel" => "stable"
-      },
+      "supervisor" =>
+        %{
+          "version" => "2026.06.2",
+          "version_latest" => "2026.06.2",
+          "update_available" => false,
+          "healthy" => true,
+          "supported" => true,
+          "channel" => "stable"
+        }
+        |> Map.merge(supervisor_overrides),
       "addons" => [addon]
     }
   end

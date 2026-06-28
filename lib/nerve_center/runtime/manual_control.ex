@@ -13,7 +13,7 @@ defmodule NerveCenter.Runtime.ManualControl do
 
   def refresh_source(device_id, source_name) do
     device = Topology.get_device!(device_id)
-    source = source_for(device.id, source_name)
+    source = Topology.get_source!(device.id, source_name)
     module = source.module
     previous = current_source_snapshot(device.id, source.name)
     context = context(device, source, previous)
@@ -189,24 +189,4 @@ defmodule NerveCenter.Runtime.ManualControl do
   defp sanitize_refresh_error({:request, _}), do: {:request, :failed}
   defp sanitize_refresh_error(reason) when is_atom(reason), do: reason
   defp sanitize_refresh_error(_reason), do: {:manual_refresh_failed, :callback_error}
-
-  defp source_for(device_id, source_name) do
-    source_name = normalize_source_name(source_name)
-
-    :nerve_center
-    |> Application.get_env(:manual_control_source_overrides, %{})
-    |> Map.get({device_id, source_name})
-    |> case do
-      nil -> Topology.get_source!(device_id, source_name)
-      source -> source
-    end
-  end
-
-  defp normalize_source_name(source_name) when is_atom(source_name), do: source_name
-
-  defp normalize_source_name(source_name) when is_binary(source_name) do
-    String.to_existing_atom(source_name)
-  rescue
-    ArgumentError -> raise ArgumentError, "unknown source #{inspect(source_name)}"
-  end
 end
