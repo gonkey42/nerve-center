@@ -1,4 +1,5 @@
 import contextlib
+import http.server
 import io
 import json
 import os
@@ -15,6 +16,7 @@ import run
 STRONG_TOKEN = "0123456789abcdef0123456789abcdef"
 EXAMPLE_TOKEN = "replace-me-with-a-random-token"
 SENSITIVE_VALUE = "raw-nut-password-should-not-leak"
+SUPERVISOR_TOKEN_VALUE = "supervisor-token-should-not-leak"
 
 
 class ExplodingSupervisor:
@@ -29,15 +31,16 @@ class ExplodingSupervisor:
 
 
 class ShapedSupervisor:
-    def __init__(self, supervisor_info, addon_info):
+    def __init__(self, supervisor_info, addon_info, addons=None):
         self._supervisor_info = supervisor_info
         self._addon_info = addon_info
+        self._addons = addons if addons is not None else {"addons": [{"slug": "a0d7b954_nut"}]}
 
     def supervisor_info(self):
         return self._supervisor_info
 
     def addons(self):
-        return []
+        return self._addons
 
     def addon_info(self, slug):
         return self._addon_info
@@ -315,9 +318,12 @@ class BridgeStartupAndAuthTest(unittest.TestCase):
         )
         server, port = run.start_test_server(app)
         self.addCleanup(server.shutdown)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
 
         request = self.auth_request(port, "/health", authorization=f"Bearer {STRONG_TOKEN}")
-        body = self.assert_error_response(request, 502, {"error": "supervisor_unavailable"})
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            body = self.assert_error_response(request, 502, {"error": "supervisor_unavailable"})
         self.assertNotIn(STRONG_TOKEN, body)
 
     def test_invalid_utf8_supervisor_payload_returns_sanitized_502(self):
@@ -420,7 +426,8 @@ class BridgeStartupAndAuthTest(unittest.TestCase):
             body = response.read().decode("utf-8")
         payload = json.loads(body)
         self.assertEqual(payload["supervisor"]["version"], "2026.06.2")
-        self.assertEqual(payload["watched_addons"], [{"slug": "a0d7b954_nut", "state": "started"}])
+        self.assertEqual(payload["addons"][0]["slug"], "a0d7b954_nut")
+        self.assertEqual(payload["addons"][0]["state"], "started")
         self.assertNotIn(STRONG_TOKEN, body)
         self.assertNotIn(SENSITIVE_VALUE, body)
 
@@ -596,6 +603,530 @@ class BridgeStartupAndAuthTest(unittest.TestCase):
 
             with self.assertRaisesRegex(run.ConfigError, "HTTP port .* unavailable"):
                 run.start_server(app, host="127.0.0.1", port=port)
+
+
+class BridgeHealthPayloadTest(unittest.TestCase):
+    def auth_request(self, port, path, authorization=None, method="GET", data=None):
+        headers = {}
+        if authorization is not None:
+            headers["Authorization"] = authorization
+        return urllib.request.Request(
+            f"http://127.0.0.1:{port}{path}",
+            data=data,
+            headers=headers,
+            method=method,
+        )
+
+    def read_http_error(self, request, expected_status, expected_payload):
+        with self.assertRaises(urllib.error.HTTPError) as raised:
+            urllib.request.urlopen(request, timeout=2)
+
+        error = raised.exception
+        self.assertEqual(error.code, expected_status)
+        body = error.read().decode("utf-8")
+        error.close()
+        self.assertEqual(json.loads(body), expected_payload)
+        return body
+
+    def raw_nut_options(self, username="", password=SENSITIVE_VALUE):
+        return {
+            "mode": "netserver",
+            "shutdown_host": False,
+            "devices": [{"name": "ups", "driver": "usbhid-ups", "port": "auto"}],
+            "users": [
+                {
+                    "username": username,
+                    "password": password,
+                    "upsmon": None,
+                }
+            ],
+        }
+
+    def nut_detail(self, options=None, network=None):
+        return {
+            "slug": "a0d7b954_nut",
+            "name": "Network UPS Tools",
+            "state": "started",
+            "available": True,
+            "version": "1.0.0",
+            "options": options if options is not None else self.raw_nut_options(),
+            "network": {"3493/tcp": 3493} if network is None else network,
+            "password": SENSITIVE_VALUE,
+            "SUPERVISOR_TOKEN": SUPERVISOR_TOKEN_VALUE,
+            "Authorization": f"Bearer {SUPERVISOR_TOKEN_VALUE}",
+            "logs": "secret log body",
+            "log": "secret log body",
+            "secrets": {"token": SUPERVISOR_TOKEN_VALUE},
+        }
+
+    def overview(self, slug="a0d7b954_nut", **overrides):
+        overview = {
+            "slug": slug,
+            "name": "Network UPS Tools" if slug == "a0d7b954_nut" else "Unknown Add-on",
+            "state": "started",
+            "available": True,
+            "version": "1.0.0",
+            "options": {"password": SENSITIVE_VALUE},
+            "password": SENSITIVE_VALUE,
+            "SUPERVISOR_TOKEN": SUPERVISOR_TOKEN_VALUE,
+            "Authorization": f"Bearer {SUPERVISOR_TOKEN_VALUE}",
+            "logs": "secret log body",
+            "log": "secret log body",
+            "secrets": {"token": SUPERVISOR_TOKEN_VALUE},
+        }
+        overview.update(overrides)
+        return overview
+
+    def supervisor_info(self, **overrides):
+        info = {
+            "version": "2026.06.2",
+            "healthy": True,
+            "supported": True,
+            "arch": "amd64",
+            "options": {"password": SENSITIVE_VALUE},
+            "password": SENSITIVE_VALUE,
+            "username": "raw-user",
+            "users": [{"username": "raw-user", "password": SENSITIVE_VALUE}],
+            "SUPERVISOR_TOKEN": SUPERVISOR_TOKEN_VALUE,
+            "Authorization": f"Bearer {SUPERVISOR_TOKEN_VALUE}",
+            "logs": "secret log body",
+            "log": "secret log body",
+            "secrets": {"token": SUPERVISOR_TOKEN_VALUE},
+        }
+        info.update(overrides)
+        return info
+
+    def supervisor(self, supervisor_info=None, addons=None, details=None, detail_errors=None):
+        class ControlledSupervisor:
+            def __init__(self, test_case):
+                self.test_case = test_case
+
+            def supervisor_info(self):
+                value = supervisor_info if supervisor_info is not None else self.test_case.supervisor_info()
+                if isinstance(value, Exception):
+                    raise value
+                return value
+
+            def addons(self):
+                if isinstance(addons, Exception):
+                    raise addons
+                if addons is None:
+                    return {"addons": [self.test_case.overview()]}
+                return addons
+
+            def addon_info(self, slug):
+                if detail_errors and slug in detail_errors:
+                    raise detail_errors[slug]
+                if details is None:
+                    return self.test_case.nut_detail()
+                value = details.get(slug, {})
+                if isinstance(value, Exception):
+                    raise value
+                return value
+
+        return ControlledSupervisor(self)
+
+    def start_bridge(self, supervisor):
+        app = run.BridgeApp(
+            options={"token": STRONG_TOKEN, "watched_addons": ["a0d7b954_nut"]},
+            supervisor=supervisor,
+        )
+        server, port = run.start_test_server(app)
+        self.addCleanup(server.shutdown)
+        return port
+
+    def assert_redacted_payload(self, payload):
+        encoded = json.dumps(payload, sort_keys=True)
+        self.assertNotIn("raw-nut-password-should-not-leak", encoded)
+        self.assertNotIn("supervisor-token-should-not-leak", encoded)
+        self.assertNotIn("SUPERVISOR_TOKEN", encoded)
+        self.assertNotIn("Authorization", encoded)
+        self.assertNotIn('"username":', encoded)
+        self.assertNotIn('"password":', encoded)
+        self.assertNotIn('"options":', encoded)
+        self.assertNotIn('"secrets":', encoded)
+        self.assertNotIn('"logs":', encoded)
+        self.assertNotIn('"log":', encoded)
+        return encoded
+
+    def assert_failure_is_redacted(self, body, output):
+        combined = body + output
+        for forbidden in [
+            "Traceback",
+            STRONG_TOKEN,
+            SENSITIVE_VALUE,
+            SUPERVISOR_TOKEN_VALUE,
+            "SUPERVISOR_TOKEN",
+            "Authorization",
+            "password",
+            "secret",
+            "raw options",
+            "raw response",
+        ]:
+            self.assertNotIn(forbidden, combined)
+
+    def start_upstream(self, responses):
+        class UpstreamHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(handler_self):
+                status, body = responses.get(handler_self.path, (404, b'{"error":"not_found"}'))
+                handler_self.send_response(status)
+                handler_self.send_header("Content-Type", "application/json")
+                handler_self.send_header("Content-Length", str(len(body)))
+                handler_self.end_headers()
+                handler_self.wfile.write(body)
+
+            def log_message(self, format, *args):
+                return
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), UpstreamHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        self.addCleanup(thread.join, 2)
+        return f"http://127.0.0.1:{server.server_address[1]}"
+
+    def assert_supervisor_client_failure(self, responses, expected_log):
+        base_url = self.start_upstream(responses)
+        supervisor = run.SupervisorClient(SUPERVISOR_TOKEN_VALUE, base_url=base_url)
+        port = self.start_bridge(supervisor)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        request = self.auth_request(port, "/health", authorization=f"Bearer {STRONG_TOKEN}")
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            body = self.read_http_error(request, 502, {"error": "supervisor_unavailable"})
+
+        output = stdout.getvalue() + stderr.getvalue()
+        self.assertEqual(body, '{"error":"supervisor_unavailable"}')
+        self.assertIn(expected_log, output)
+        self.assert_failure_is_redacted(body, output)
+
+    def test_health_payload_includes_supervisor_and_watched_addon(self):
+        payload = run.build_health_payload(self.supervisor(), ["a0d7b954_nut"])
+
+        self.assertIn("observed_at", payload)
+        self.assertIn("supervisor", payload)
+        self.assertIn("addons", payload)
+        self.assertEqual(payload["supervisor"]["version"], "2026.06.2")
+        self.assertEqual(payload["supervisor"]["healthy"], True)
+        self.assertEqual(payload["supervisor"]["supported"], True)
+        self.assertEqual(len(payload["addons"]), 1)
+        addon = payload["addons"][0]
+        self.assertEqual(addon["slug"], "a0d7b954_nut")
+        self.assertEqual(addon["name"], "Network UPS Tools")
+        self.assertEqual(addon["state"], "started")
+        self.assertEqual(addon["available"], True)
+        self.assertEqual(
+            addon["config_summary"],
+            {
+                "mode": "netserver",
+                "shutdown_host": False,
+                "device_count": 1,
+                "users": [{"username_set": False, "password_set": True, "upsmon": None}],
+            },
+        )
+        self.assert_redacted_payload(payload)
+
+    def test_nut_options_are_summarized_without_password_values(self):
+        payload = run.build_health_payload(self.supervisor(), ["a0d7b954_nut"])
+        addon = payload["addons"][0]
+
+        self.assertEqual(addon["config_summary"]["users"][0]["username_set"], False)
+        self.assertEqual(addon["config_summary"]["users"][0]["password_set"], True)
+        encoded = self.assert_redacted_payload(payload)
+        self.assertIn('"username_set"', encoded)
+        self.assertIn('"password_set"', encoded)
+
+    def test_default_deny_omits_config_summary_for_unknown_addon(self):
+        detail = {
+            "slug": "unknown_addon",
+            "name": "Unknown Add-on",
+            "state": "started",
+            "available": True,
+            "options": self.raw_nut_options(),
+            "password": SENSITIVE_VALUE,
+            "SUPERVISOR_TOKEN": SUPERVISOR_TOKEN_VALUE,
+            "Authorization": f"Bearer {SUPERVISOR_TOKEN_VALUE}",
+            "logs": "secret log body",
+            "log": "secret log body",
+            "secrets": {"token": SUPERVISOR_TOKEN_VALUE},
+        }
+        payload = run.build_health_payload(
+            self.supervisor(
+                addons={"addons": [self.overview(slug="unknown_addon")]},
+                details={"unknown_addon": detail},
+            ),
+            ["unknown_addon"],
+        )
+
+        addon = payload["addons"][0]
+        self.assertEqual(addon["slug"], "unknown_addon")
+        self.assertNotIn("config_summary", addon)
+        self.assertEqual(addon["config_warnings"], [])
+        self.assert_redacted_payload(payload)
+
+    def test_nut_blank_username_and_password_emit_critical_warnings(self):
+        options = self.raw_nut_options(username="", password="")
+        payload = run.build_health_payload(
+            self.supervisor(details={"a0d7b954_nut": self.nut_detail(options=options)}),
+            ["a0d7b954_nut"],
+        )
+
+        warnings = payload["addons"][0]["config_warnings"]
+        self.assertIn(
+            {
+                "code": "nut_username_blank",
+                "severity": "critical",
+                "message": "NUT user username is blank.",
+            },
+            warnings,
+        )
+        self.assertIn(
+            {
+                "code": "nut_password_blank",
+                "severity": "critical",
+                "message": "NUT user password is blank.",
+            },
+            warnings,
+        )
+        encoded = self.assert_redacted_payload(payload)
+        self.assertIn('"username_set"', encoded)
+        self.assertIn('"password_set"', encoded)
+        self.assertIn("nut_username_blank", encoded)
+        self.assertIn("nut_password_blank", encoded)
+
+    def test_unmapped_nut_port_emits_warning(self):
+        payload = run.build_health_payload(
+            self.supervisor(details={"a0d7b954_nut": self.nut_detail(network={})}),
+            ["a0d7b954_nut"],
+        )
+
+        self.assertIn(
+            {
+                "code": "nut_port_unmapped",
+                "severity": "warning",
+                "message": "NUT netserver port 3493 is not mapped.",
+            },
+            payload["addons"][0]["config_warnings"],
+        )
+        self.assert_redacted_payload(payload)
+
+    def test_individual_addon_info_failure_keeps_200_shape_with_unknown_state(self):
+        payload = run.build_health_payload(
+            self.supervisor(
+                detail_errors={
+                    "a0d7b954_nut": run.SupervisorError(
+                        f"failed {SENSITIVE_VALUE} Authorization {SUPERVISOR_TOKEN_VALUE}"
+                    )
+                }
+            ),
+            ["a0d7b954_nut"],
+        )
+
+        self.assertEqual(
+            payload["addons"],
+            [
+                {
+                    "slug": "a0d7b954_nut",
+                    "name": "a0d7b954_nut",
+                    "state": "unknown",
+                    "available": False,
+                    "bridge_warnings": [
+                        {
+                            "code": "addon_info_unavailable",
+                            "severity": "warning",
+                            "message": "Supervisor info for add-on a0d7b954_nut was unavailable.",
+                        }
+                    ],
+                    "config_warnings": [],
+                }
+            ],
+        )
+        self.assert_redacted_payload(payload)
+
+    def test_supervisor_auth_failure_returns_generic_502_body(self):
+        self.assert_supervisor_client_failure(
+            {
+                "/supervisor/info": (
+                    401,
+                    b'{"error":"Authorization Bearer supervisor-token-should-not-leak raw-nut-password-should-not-leak"}',
+                )
+            },
+            "Supervisor API authorization failed",
+        )
+
+    def test_supervisor_5xx_failure_returns_generic_502_body(self):
+        self.assert_supervisor_client_failure(
+            {
+                "/supervisor/info": (
+                    500,
+                    b'{"error":"Authorization Bearer supervisor-token-should-not-leak raw-nut-password-should-not-leak"}',
+                )
+            },
+            "Supervisor API unavailable",
+        )
+
+    def test_bridge_handler_failure_returns_generic_500_without_leaks(self):
+        class ExplodingApp:
+            options = {"token": STRONG_TOKEN, "watched_addons": ["a0d7b954_nut"]}
+
+            def health_payload(self):
+                raise RuntimeError(
+                    f"Traceback fake {STRONG_TOKEN} raw-nut-password-should-not-leak "
+                    "SUPERVISOR_TOKEN Authorization"
+                )
+
+        server, port = run.start_test_server(ExplodingApp())
+        self.addCleanup(server.shutdown)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        request = self.auth_request(port, "/health", authorization=f"Bearer {STRONG_TOKEN}")
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            body = self.read_http_error(request, 500, {"error": "bridge_error"})
+
+        output = stdout.getvalue() + stderr.getvalue()
+        self.assertEqual(body, '{"error":"bridge_error"}')
+        self.assertIn("Bridge handler failed", output)
+        self.assert_failure_is_redacted(body, output)
+
+    def test_sanitizers_allowlist_fields_and_omit_raw_secret_like_fields(self):
+        options = self.raw_nut_options(username="", password="")
+        raw_detail = self.nut_detail(options=options)
+        raw_detail.update(
+            {
+                "username": "raw-user-should-not-leak",
+                "users": [{"username": "raw-user", "password": SENSITIVE_VALUE}],
+            }
+        )
+        supervisor = self.supervisor(
+            supervisor_info=self.supervisor_info(username="raw-user-should-not-leak"),
+            addons={"addons": [self.overview(username="raw-user-should-not-leak")]},
+            details={"a0d7b954_nut": raw_detail},
+        )
+        app = run.BridgeApp(
+            options={"token": STRONG_TOKEN, "watched_addons": ["a0d7b954_nut"]},
+            supervisor=supervisor,
+        )
+        server, port = run.start_test_server(app)
+        self.addCleanup(server.shutdown)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        request = self.auth_request(port, "/health", authorization=f"Bearer {STRONG_TOKEN}")
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            with urllib.request.urlopen(request, timeout=2) as response:
+                self.assertEqual(response.status, 200)
+                body = response.read().decode("utf-8")
+
+        payload = json.loads(body)
+        encoded = self.assert_redacted_payload(payload)
+        output = stdout.getvalue() + stderr.getvalue()
+        for forbidden in [
+            SENSITIVE_VALUE,
+            SUPERVISOR_TOKEN_VALUE,
+            "raw-user-should-not-leak",
+            '"options":',
+            '"password":',
+            '"secrets":',
+            '"username":',
+            '"logs":',
+            '"log":',
+            '"Authorization":',
+            '"SUPERVISOR_TOKEN":',
+        ]:
+            self.assertNotIn(forbidden, body)
+            self.assertNotIn(forbidden, output)
+        self.assertIn('"username_set"', encoded)
+        self.assertIn('"password_set"', encoded)
+        self.assertIn("nut_username_blank", encoded)
+        self.assertIn("nut_password_blank", encoded)
+
+    def test_supervisor_info_invalid_json_returns_generic_502_without_leaks(self):
+        self.assert_supervisor_client_failure(
+            {
+                "/supervisor/info": (
+                    200,
+                    b'{"token":"supervisor-token-should-not-leak","password":"raw-nut-password-should-not-leak"',
+                )
+            },
+            "Supervisor API unavailable",
+        )
+
+    def test_supervisor_info_unexpected_shape_returns_generic_502_without_leaks(self):
+        self.assert_supervisor_client_failure(
+            {"/supervisor/info": (200, b'["supervisor-token-should-not-leak","raw-nut-password-should-not-leak"]')},
+            "Supervisor API unavailable",
+        )
+
+    def test_addons_invalid_json_returns_generic_502_without_leaks(self):
+        self.assert_supervisor_client_failure(
+            {
+                "/supervisor/info": (
+                    200,
+                    b'{"version":"2026.06.2","healthy":true,"supported":true}',
+                ),
+                "/addons": (
+                    200,
+                    b'{"token":"supervisor-token-should-not-leak","password":"raw-nut-password-should-not-leak"',
+                ),
+            },
+            "Supervisor API unavailable",
+        )
+
+    def test_addons_unexpected_shape_returns_generic_502_without_leaks(self):
+        self.assert_supervisor_client_failure(
+            {
+                "/supervisor/info": (
+                    200,
+                    b'{"version":"2026.06.2","healthy":true,"supported":true}',
+                ),
+                "/addons": (
+                    200,
+                    b'{"addons":{"slug":"a0d7b954_nut","password":"raw-nut-password-should-not-leak"}}',
+                ),
+            },
+            "Supervisor API unavailable",
+        )
+
+    def test_addon_info_invalid_json_returns_generic_502_without_leaks(self):
+        self.assert_supervisor_client_failure(
+            {
+                "/supervisor/info": (
+                    200,
+                    b'{"version":"2026.06.2","healthy":true,"supported":true}',
+                ),
+                "/addons": (
+                    200,
+                    b'{"addons":[{"slug":"a0d7b954_nut","name":"Network UPS Tools","state":"started","available":true}]}',
+                ),
+                "/addons/a0d7b954_nut/info": (
+                    200,
+                    b'{"token":"supervisor-token-should-not-leak","password":"raw-nut-password-should-not-leak"',
+                ),
+            },
+            "Supervisor API unavailable",
+        )
+
+    def test_addon_info_unexpected_shape_returns_generic_502_without_leaks(self):
+        self.assert_supervisor_client_failure(
+            {
+                "/supervisor/info": (
+                    200,
+                    b'{"version":"2026.06.2","healthy":true,"supported":true}',
+                ),
+                "/addons": (
+                    200,
+                    b'{"addons":[{"slug":"a0d7b954_nut","name":"Network UPS Tools","state":"started","available":true}]}',
+                ),
+                "/addons/a0d7b954_nut/info": (
+                    200,
+                    b'["supervisor-token-should-not-leak","raw-nut-password-should-not-leak"]',
+                ),
+            },
+            "Supervisor API unavailable",
+        )
 
 
 if __name__ == "__main__":

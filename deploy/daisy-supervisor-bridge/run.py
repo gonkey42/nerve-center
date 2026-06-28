@@ -26,6 +26,10 @@ class SupervisorAuthError(SupervisorError):
     pass
 
 
+class SupervisorMalformedError(SupervisorError):
+    pass
+
+
 class BridgeApp:
     def __init__(self, options, supervisor):
         self.options = validate_options(options)
@@ -41,30 +45,37 @@ class SupervisorClient:
         self.base_url = base_url.rstrip("/")
 
     def supervisor_info(self):
-        return self._get_json("/supervisor/info")
+        return _require_object(self.get_json("/supervisor/info"))
 
     def addons(self):
-        return self._get_json("/addons")
+        return _require_object(self.get_json("/addons"))
 
     def addon_info(self, slug):
-        return self._get_json(f"/addons/{slug}/info")
+        return _require_object(self.get_json(f"/addons/{slug}/info"))
 
-    def _get_json(self, path):
+    def get_json(self, path):
         request = urllib.request.Request(
             f"{self.base_url}{path}",
-            headers={"Authorization": f"Bearer {self.token}"},
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Accept": "application/json",
+            },
         )
         try:
             with urllib.request.urlopen(request, timeout=5) as response:
-                payload = json.load(response)
+                return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
+            error.close()
             if error.code in (401, 403):
-                raise SupervisorAuthError("Supervisor request unauthorized") from None
-            raise SupervisorError("Supervisor request failed") from None
-        except (urllib.error.URLError, TimeoutError, OSError, UnicodeDecodeError, json.JSONDecodeError):
-            raise SupervisorError("Supervisor request failed") from None
+                raise SupervisorAuthError("Supervisor API authorization failed") from None
+            raise SupervisorError("Supervisor API request failed") from None
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise SupervisorMalformedError("Supervisor API response malformed") from None
+        except (urllib.error.URLError, TimeoutError, OSError):
+            raise SupervisorError("Supervisor API unavailable") from None
 
-        return _require_object(payload)
+    def _get_json(self, path):
+        return self.get_json(path)
 
 
 class FakeSupervisorClient:
@@ -77,7 +88,9 @@ class FakeSupervisorClient:
         return dict(self._supervisor_info)
 
     def addons(self):
-        return list(self._addons)
+        if isinstance(self._addons, dict):
+            return dict(self._addons)
+        return {"addons": list(self._addons)}
 
     def addon_info(self, slug):
         return dict(self._addon_info.get(slug, {}))
@@ -133,21 +146,120 @@ def validate_options(options):
 
 def build_health_payload(supervisor, watched_addons):
     supervisor_info = _require_object(supervisor.supervisor_info())
+    addon_overviews = _addon_overviews_by_slug(supervisor.addons())
     addon_payloads = []
 
     for slug in watched_addons:
-        addon_info = _require_object(supervisor.addon_info(slug))
-        addon_payloads.append({"slug": slug, "state": _string_or_none(addon_info.get("state"))})
+        overview = addon_overviews.get(slug, {})
+        try:
+            addon_info = _require_object(supervisor.addon_info(slug))
+        except SupervisorMalformedError:
+            raise
+        except SupervisorError:
+            addon_payloads.append(_unavailable_addon(slug))
+            continue
+
+        addon_payloads.append(sanitize_addon_info(slug, overview, addon_info))
 
     return {
-        "checked_at": _utc_now(),
-        "supervisor": {
-            "healthy": bool(supervisor_info.get("healthy")),
-            "supported": bool(supervisor_info.get("supported")),
-            "version": _string_or_none(supervisor_info.get("version")),
-        },
-        "watched_addons": addon_payloads,
+        "observed_at": iso_utc_now(),
+        "supervisor": sanitize_supervisor_info(supervisor_info),
+        "addons": addon_payloads,
     }
+
+
+def sanitize_supervisor_info(raw):
+    sanitized = {
+        "healthy": bool(raw.get("healthy")),
+        "supported": bool(raw.get("supported")),
+        "version": _string_or_none(raw.get("version")),
+    }
+    if "arch" in raw:
+        sanitized["arch"] = _string_or_none(raw.get("arch"))
+    return sanitized
+
+
+def sanitize_addon_info(slug, overview, detail):
+    addon = {
+        "slug": slug,
+        "name": _first_string(detail.get("name"), overview.get("name"), slug),
+        "state": _first_string(detail.get("state"), overview.get("state"), "unknown"),
+        "available": _first_bool(detail.get("available"), overview.get("available"), False),
+        "bridge_warnings": [],
+        "config_warnings": [],
+    }
+
+    version = _first_string(detail.get("version"), overview.get("version"), None)
+    if version is not None:
+        addon["version"] = version
+
+    if slug == "a0d7b954_nut":
+        config_summary, config_warnings = sanitize_nut_config(
+            detail.get("options"),
+            detail.get("network"),
+        )
+        addon["config_summary"] = config_summary
+        addon["config_warnings"] = config_warnings
+
+    return addon
+
+
+def sanitize_nut_config(options, network):
+    if not isinstance(options, dict):
+        options = {}
+
+    users = []
+    warnings = []
+    username_blank = False
+    password_blank = False
+
+    for raw_user in options.get("users", []):
+        if not isinstance(raw_user, dict):
+            continue
+
+        username_set = _non_empty_string(raw_user.get("username"))
+        password_set = _non_empty_string(raw_user.get("password"))
+        username_blank = username_blank or not username_set
+        password_blank = password_blank or not password_set
+        users.append(
+            {
+                "username_set": username_set,
+                "password_set": password_set,
+                "upsmon": _safe_upsmon(raw_user.get("upsmon")),
+            }
+        )
+
+    if username_blank:
+        warnings.append(problem("nut_username_blank", "critical", "NUT user username is blank."))
+    if password_blank:
+        warnings.append(problem("nut_password_blank", "critical", "NUT user password is blank."))
+
+    mode = _string_or_none(options.get("mode"))
+    if mode == "netserver" and not _network_port_mapped(network, "3493"):
+        warnings.append(problem("nut_port_unmapped", "warning", "NUT netserver port 3493 is not mapped."))
+
+    return (
+        {
+            "mode": mode,
+            "shutdown_host": _bool_or_none(options.get("shutdown_host")),
+            "device_count": _device_count(options.get("devices")),
+            "users": users,
+        },
+        warnings,
+    )
+
+
+def problem(code, severity, message):
+    return {"code": code, "severity": severity, "message": message}
+
+
+def iso_utc_now():
+    return (
+        datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
 
 
 class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -212,8 +324,17 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
         try:
             payload = self.server.app.health_payload()
-        except SupervisorError:
+        except SupervisorAuthError:
+            print("Supervisor API authorization failed", file=sys.stderr)
             self._send_json(502, {"error": "supervisor_unavailable"})
+            return
+        except SupervisorError:
+            print("Supervisor API unavailable", file=sys.stderr)
+            self._send_json(502, {"error": "supervisor_unavailable"})
+            return
+        except Exception:
+            print("Bridge handler failed", file=sys.stderr)
+            self._send_json(500, {"error": "bridge_error"})
             return
 
         self._send_json(200, payload)
@@ -282,8 +403,41 @@ def _contains_control_character(value):
 
 def _require_object(payload):
     if not isinstance(payload, dict):
-        raise SupervisorError("Supervisor response malformed")
+        raise SupervisorMalformedError("Supervisor response malformed")
     return payload
+
+
+def _addon_overviews_by_slug(payload):
+    payload = _require_object(payload)
+    addons = payload.get("addons")
+    if not isinstance(addons, list):
+        raise SupervisorMalformedError("Supervisor add-ons response malformed")
+
+    by_slug = {}
+    for addon in addons:
+        if not isinstance(addon, dict):
+            raise SupervisorMalformedError("Supervisor add-ons response malformed")
+        slug = addon.get("slug")
+        if isinstance(slug, str):
+            by_slug[slug] = addon
+    return by_slug
+
+
+def _unavailable_addon(slug):
+    return {
+        "slug": slug,
+        "name": slug,
+        "state": "unknown",
+        "available": False,
+        "bridge_warnings": [
+            problem(
+                "addon_info_unavailable",
+                "warning",
+                f"Supervisor info for add-on {slug} was unavailable.",
+            )
+        ],
+        "config_warnings": [],
+    }
 
 
 def _string_or_none(value):
@@ -292,13 +446,56 @@ def _string_or_none(value):
     return str(value)
 
 
+def _first_string(*values):
+    for value in values:
+        if isinstance(value, str) and value != "":
+            return value
+    return None
+
+
+def _first_bool(*values):
+    for value in values:
+        if isinstance(value, bool):
+            return value
+    return False
+
+
+def _bool_or_none(value):
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _non_empty_string(value):
+    return isinstance(value, str) and value != ""
+
+
+def _safe_upsmon(value):
+    if value is None:
+        return None
+    if value in ("master", "slave", "primary", "secondary"):
+        return value
+    return None
+
+
+def _device_count(devices):
+    if not isinstance(devices, list):
+        return 0
+    return sum(1 for device in devices if isinstance(device, dict))
+
+
+def _network_port_mapped(network, port):
+    if not isinstance(network, dict):
+        return False
+    for key in (port, f"{port}/tcp"):
+        value = network.get(key)
+        if value not in (None, False, ""):
+            return True
+    return False
+
+
 def _utc_now():
-    return (
-        datetime.datetime.now(datetime.timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    return iso_utc_now()
 
 
 if __name__ == "__main__":
