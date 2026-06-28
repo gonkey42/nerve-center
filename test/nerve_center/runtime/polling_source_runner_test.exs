@@ -865,7 +865,15 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
 
   defp clear_persistence_writer_queues do
     :sys.replace_state(PersistenceWriter, fn state ->
-      %{state | samples: [], sample_count: 0, events: [], event_count: 0}
+      %{
+        state
+        | samples: [],
+          sample_count: 0,
+          events: [],
+          event_count: 0,
+          probes: [],
+          probe_count: 0
+      }
     end)
   end
 
