@@ -428,6 +428,15 @@ defmodule NerveCenter.Runtime.PollingSourceRunnerTest do
     assert_runner_redacts_raw_failure_body(reason, [opaque_secret])
   end
 
+  test "runner redacts serialized sensitive key value failure reasons from failure surfaces" do
+    opaque_secret = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01"
+
+    reason =
+      ~s(bridge failed {"client_secret":"#{opaque_secret}"} %{"session_id" => "#{opaque_secret}"})
+
+    assert_runner_redacts_raw_failure_body(reason, [opaque_secret])
+  end
+
   test "successful payload without status still publishes ok" do
     device = test_device()
     source_name = :ha_supervisor

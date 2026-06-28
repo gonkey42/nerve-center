@@ -18,8 +18,12 @@ defmodule NerveCenter.Runtime.FailureReason do
     "traceback"
   ]
   @sensitive_key_marker_pattern Enum.join(@sensitive_key_markers, "|")
+  @sensitive_quoted_key_value_pattern "([\"'])([A-Za-z0-9_-]*(?:#{@sensitive_key_marker_pattern})[A-Za-z0-9_-]*)\\1" <>
+                                        "(\\s*(?:=>|=|:)\\s*)" <>
+                                        "([\"'])(?:[^\"']*)\\4"
+  @sensitive_quoted_key_value_regex Regex.compile!(@sensitive_quoted_key_value_pattern, "i")
   @sensitive_key_value_pattern "\\b([A-Za-z0-9_-]*(?:#{@sensitive_key_marker_pattern})[A-Za-z0-9_-]*)\\b" <>
-                                 "(\\s*(?:=|:)\\s*|\\s+)" <>
+                                 "(\\s*(?:=>|=|:)\\s*|\\s+)" <>
                                  "(?:\"[^\"]*\"|'[^']*'|[^\\s,;&]+)"
   @sensitive_key_value_regex Regex.compile!(@sensitive_key_value_pattern, "i")
 
@@ -128,6 +132,22 @@ defmodule NerveCenter.Runtime.FailureReason do
   end
 
   defp redact_sensitive_key_values(value) do
+    value
+    |> redact_quoted_sensitive_key_values()
+    |> redact_unquoted_sensitive_key_values()
+  end
+
+  defp redact_quoted_sensitive_key_values(value) do
+    Regex.replace(
+      @sensitive_quoted_key_value_regex,
+      value,
+      fn _match, key_quote, key, separator, value_quote ->
+        key_quote <> key <> key_quote <> separator <> value_quote <> "[REDACTED]" <> value_quote
+      end
+    )
+  end
+
+  defp redact_unquoted_sensitive_key_values(value) do
     Regex.replace(@sensitive_key_value_regex, value, fn _match, key, separator ->
       key <> separator <> "[REDACTED]"
     end)

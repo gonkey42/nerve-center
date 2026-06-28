@@ -64,7 +64,9 @@ defmodule NerveCenter.Runtime.FailureReasonTest do
       {"client_secret=#{@opaque_secret}", "client_secret=[REDACTED]"},
       {"apiKey: #{@opaque_secret}", "apiKey: [REDACTED]"},
       {"session_id #{@opaque_secret}", "session_id [REDACTED]"},
-      {"credential=#{@opaque_secret}", "credential=[REDACTED]"}
+      {"credential=#{@opaque_secret}", "credential=[REDACTED]"},
+      {~s({"client_secret":"#{@opaque_secret}"}), ~s({"client_secret":"[REDACTED]"})},
+      {~s(%{"session_id" => "#{@opaque_secret}"}), ~s(%{"session_id" => "[REDACTED]"})}
     ]
 
     for {fragment, expected} <- cases do
