@@ -9,12 +9,36 @@ for {key, value} <- [
       {"NUT_PASSWORD", "test-nut-password"},
       {"IMMICH_API_KEY", "test-immich-api-key"},
       {"HA_TOKEN", "test-ha-token"},
+      {"DAISY_SUPERVISOR_BRIDGE_TOKEN", "test-daisy-supervisor-bridge-token-123456"},
       {"UNIFI_API_KEY", "test-unifi-api-key"}
     ] do
   if is_nil(System.get_env(key)) do
     System.put_env(key, value)
   end
 end
+
+devices =
+  :nerve_center
+  |> Application.get_env(:devices, [])
+  |> then(fn
+    [] ->
+      __DIR__
+      |> Path.join("devices.exs")
+      |> Config.Reader.read!()
+      |> get_in([:nerve_center, :devices])
+
+    devices ->
+      devices
+  end)
+  |> Enum.map(fn
+    %{id: :daisy} = device ->
+      %{device | supervisor_bridge_base_url: "http://127.0.0.1:9567"}
+
+    device ->
+      device
+  end)
+
+config :nerve_center, :devices, devices
 
 config :nerve_center, :paths,
   db: Path.expand("../tmp/test/nerve_center.sqlite3", __DIR__),

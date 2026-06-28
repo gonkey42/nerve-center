@@ -84,7 +84,12 @@ defmodule NerveCenter.MixProject do
         "esbuild nerve_center --minify",
         "phx.digest"
       ],
-      precommit: ["compile --warnings-as-errors", "format", "test"]
+      precommit: [
+        "compile --warnings-as-errors",
+        "format",
+        "test",
+        "cmd python3 -m unittest discover -s deploy/daisy-supervisor-bridge -p '*_test.py'"
+      ]
     ]
   end
 end

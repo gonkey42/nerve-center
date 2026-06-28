@@ -1,7 +1,32 @@
 defmodule NerveCenterWeb.DetailLiveTest do
   use NerveCenterWeb.ConnCase, async: false
 
+  import ExUnit.CaptureLog
+
+  import NerveCenter.TestSupport.DaisySupervisorBridgeHelpers,
+    only: [
+      assert_forbidden_absent: 1,
+      bridge_token: 0,
+      forbidden_body: 0,
+      listen_socket: 0,
+      send_response: 2,
+      serve_requests: 3
+    ]
+
+  import NerveCenter.TestSupport.PersistenceWriterHelpers,
+    only: [clear_persistence_writer_queues: 0]
+
   import Phoenix.LiveViewTest
+
+  alias NerveCenter.Messages.SourceSnapshotUpdated
+  alias NerveCenter.Runtime.AppHealth
+  alias NerveCenter.Runtime.PollingSourceRunner
+  alias NerveCenter.Runtime.SnapshotStore
+  alias NerveCenter.Snapshot.DeviceSnapshot
+  alias NerveCenter.Snapshot.SourceSnapshot
+  alias NerveCenter.Sources.Daisy.HASupervisorSource
+  alias NerveCenter.TestSupport.DaisyRuntimeHelpers
+  alias NerveCenter.Topology
 
   test "device detail renders for phase 1 devices", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/devices/hal9000")
@@ -59,6 +84,289 @@ defmodule NerveCenterWeb.DetailLiveTest do
     assert html =~ "Health State"
   end
 
+  test "source detail renders daisy ha supervisor source with sanitized addon table", %{
+    conn: conn
+  } do
+    now = DateTime.utc_now()
+
+    seed_daisy_supervisor(
+      now,
+      %{
+        "summary" => %{
+          "status" => "error",
+          "problem_count" => 2,
+          "required_unhealthy_count" => 1,
+          "optional_unhealthy_count" => 0,
+          "update_available_count" => 1,
+          "message" => "Network UPS Tools has nut_username_blank and nut_password_blank."
+        },
+        "supervisor" => %{
+          "healthy" => true,
+          "supported" => true,
+          "token" => "supervisor-token-should-not-leak"
+        },
+        "addons" => [
+          %{
+            "slug" => "a0d7b954_nut",
+            "label" => "Network UPS Tools",
+            "name" => "Network UPS Tools",
+            "required" => true,
+            "state" => "stopped",
+            "status" => "error",
+            "version" => "0.18.0",
+            "version_latest" => "0.19.0",
+            "update_available" => true,
+            "config_summary" => %{"password" => "raw-nut-password-should-not-leak"},
+            "config_warnings" => [
+              %{
+                "code" => "nut_username_blank",
+                "detail" => "supervisor-token-should-not-leak"
+              },
+              %{
+                "code" => "nut_password_blank",
+                "detail" => "raw-nut-password-should-not-leak"
+              }
+            ]
+          }
+        ]
+      }
+    )
+
+    {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_supervisor")
+
+    assert html =~ "DAISY / HA Supervisor"
+    assert html =~ "Network UPS Tools"
+    assert html =~ "a0d7b954_nut"
+    assert html =~ "stopped"
+    assert html =~ "0.18.0"
+    assert html =~ "0.19.0"
+    assert html =~ "Config Warnings"
+    assert html =~ "nut_username_blank"
+    assert html =~ "nut_password_blank"
+    refute html =~ "raw-nut-password-should-not-leak"
+    refute html =~ "supervisor-token-should-not-leak"
+  end
+
+  test "source detail renders source-normalized safe nut password warning code", %{conn: conn} do
+    now = DateTime.utc_now()
+
+    assert {:ok, normalized} =
+             HASupervisorSource.normalize(
+               bridge_payload(%{
+                 "addons" => [
+                   addon_payload(%{
+                     "config_summary" => %{
+                       "password" => "raw-nut-password-should-not-leak",
+                       "password_set" => false
+                     },
+                     "config_warnings" => [
+                       %{
+                         "severity" => "critical",
+                         "code" => "nut_password_blank",
+                         "message" => "NUT user password is blank.",
+                         "detail" => "raw-nut-password-should-not-leak"
+                       }
+                     ]
+                   })
+                 ]
+               }),
+               ha_supervisor_context()
+             )
+
+    seed_daisy_supervisor(now, normalized.data)
+
+    {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_supervisor")
+
+    assert html =~ "DAISY / HA Supervisor"
+    assert html =~ "Network UPS Tools"
+    assert html =~ "nut_password_blank"
+    refute html =~ "raw-nut-password-should-not-leak"
+    refute html =~ "supervisor-token-should-not-leak"
+  end
+
+  test "source detail hides source-normalized key-value secrets and dotted bearer tails", %{
+    conn: conn
+  } do
+    now = DateTime.utc_now()
+    dotted_bearer = "header.payload.sig"
+    opaque_value = "opaque-config-value-98765"
+
+    assert {:ok, normalized} =
+             HASupervisorSource.normalize(
+               bridge_payload(%{
+                 "addons" => [
+                   addon_payload(%{
+                     "name" => "Network UPS Tools Authorization: Bearer #{dotted_bearer}",
+                     "state" => "started password: #{opaque_value}",
+                     "version" => "0.18.0 password=#{opaque_value}",
+                     "version_latest" => "0.19.0 Authorization: Bearer #{dotted_bearer}",
+                     "config_warnings" => [
+                       %{
+                         "severity" => "critical",
+                         "code" => "nut_password_blank",
+                         "message" => "password: #{opaque_value}",
+                         "detail" => "Authorization: Bearer #{dotted_bearer}"
+                       }
+                     ]
+                   })
+                 ]
+               }),
+               ha_supervisor_context()
+             )
+
+    seed_daisy_supervisor(now, normalized.data)
+
+    {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_supervisor")
+
+    assert html =~ "DAISY / HA Supervisor"
+    assert html =~ "Network UPS Tools"
+    assert html =~ "nut_password_blank"
+
+    for forbidden <- [
+          opaque_value,
+          dotted_bearer,
+          "payload.sig",
+          "Authorization",
+          "Bearer header",
+          "password:"
+        ] do
+      refute html =~ forbidden
+    end
+  end
+
+  test "source detail renders safe ha supervisor fallback when addons are missing", %{conn: conn} do
+    now = DateTime.utc_now()
+
+    seed_daisy_supervisor(now, %{
+      "summary" => %{"message" => "supervisor-token-should-not-leak"},
+      "supervisor" => %{"token" => "supervisor-token-should-not-leak"},
+      "config_summary" => %{"password" => "raw-nut-password-should-not-leak"},
+      "config_warnings" => [
+        %{
+          "code" => "nut_username_blank",
+          "detail" => "raw-nut-password-should-not-leak"
+        }
+      ]
+    })
+
+    {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_supervisor")
+
+    assert html =~ "DAISY / HA Supervisor"
+    assert html =~ "Supervisor add-on data unavailable."
+    refute html =~ "<pre"
+    refute html =~ "nut_username_blank"
+    refute html =~ "raw-nut-password-should-not-leak"
+    refute html =~ "supervisor-token-should-not-leak"
+  end
+
+  test "source detail renders safe ha supervisor fallback when addons are malformed", %{
+    conn: conn
+  } do
+    now = DateTime.utc_now()
+
+    seed_daisy_supervisor(now, %{
+      "summary" => %{"message" => "raw-nut-password-should-not-leak"},
+      "supervisor" => %{"token" => "supervisor-token-should-not-leak"},
+      "addons" => %{
+        "a0d7b954_nut" => %{
+          "label" => "Network UPS Tools",
+          "config_summary" => %{"password" => "raw-nut-password-should-not-leak"}
+        }
+      }
+    })
+
+    {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_supervisor")
+
+    assert html =~ "DAISY / HA Supervisor"
+    assert html =~ "Supervisor add-on data unavailable."
+    refute html =~ "<pre"
+    refute html =~ "Network UPS Tools"
+    refute html =~ "raw-nut-password-should-not-leak"
+    refute html =~ "supervisor-token-should-not-leak"
+  end
+
+  test "source detail safely degrades non-scalar ha supervisor addon fields", %{conn: conn} do
+    now = DateTime.utc_now()
+
+    seed_daisy_supervisor(now, %{
+      "summary" => %{"message" => ["raw-nut-password-should-not-leak"]},
+      "addons" => [
+        %{
+          "slug" => "a0d7b954_nut",
+          "label" => %{"secret" => "raw-nut-password-should-not-leak"},
+          "name" => ["supervisor-token-should-not-leak"],
+          "required" => %{"bad" => true},
+          "state" => %{"bad" => "supervisor-token-should-not-leak"},
+          "version" => ["0.18.0"],
+          "version_latest" => %{"bad" => "0.19.0"},
+          "update_available" => %{"bad" => true},
+          "config_warnings" => [
+            %{"code" => %{"bad" => "supervisor-token-should-not-leak"}},
+            %{"code" => "nut_password_blank"}
+          ]
+        }
+      ]
+    })
+
+    {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_supervisor")
+
+    assert html =~ "DAISY / HA Supervisor"
+    assert html =~ "a0d7b954_nut"
+    assert html =~ "nut_password_blank"
+    refute html =~ "raw-nut-password-should-not-leak"
+    refute html =~ "supervisor-token-should-not-leak"
+  end
+
+  test "source detail html does not render forbidden bridge body strings after failure", %{
+    conn: conn
+  } do
+    clear_persistence_writer_queues()
+    set_bridge_token()
+
+    {listener, port} = listen_socket()
+
+    server =
+      serve_requests(listener, 1, fn socket, _request ->
+        send_response(socket, {401, forbidden_body()})
+      end)
+
+    device = daisy_device(port)
+    prepare_daisy_runtime(device)
+
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.source_topic(:daisy, :ha_supervisor))
+
+    log =
+      capture_log([level: :warning], fn ->
+        start_supervised!(
+          {PollingSourceRunner,
+           module: HASupervisorSource, device: device, source: daisy_supervisor_source()}
+        )
+
+        assert_receive %SourceSnapshotUpdated{source_snapshot: failed_snapshot}, 1_000
+        assert failed_snapshot.status == :unknown
+        assert failed_snapshot.last_error == "{:auth, 401, :supervisor_bridge_unauthorized}"
+        assert_forbidden_absent(failed_snapshot.last_error)
+        assert_forbidden_absent(failed_snapshot.probe_data)
+        assert_forbidden_absent(failed_snapshot.data)
+      end)
+
+    wait_until(fn ->
+      AppHealth.source_state(:daisy, :ha_supervisor).last_error ==
+        "{:auth, 401, :supervisor_bridge_unauthorized}"
+    end)
+
+    {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_supervisor")
+
+    assert html =~ "DAISY / HA Supervisor"
+    assert html =~ "supervisor_bridge_unauthorized"
+    assert_forbidden_absent(html)
+    assert_forbidden_absent(log)
+    assert_forbidden_absent(SnapshotStore.snapshot(:daisy))
+    assert_forbidden_absent(AppHealth.source_state(:daisy, :ha_supervisor))
+
+    Task.await(server)
+  end
+
   test "source detail renders for the stig unifi source", %{conn: conn} do
     {:ok, _view, html} = live(conn, ~p"/sources/stig/unifi")
 
@@ -95,5 +403,156 @@ defmodule NerveCenterWeb.DetailLiveTest do
     assert html =~ "Launch Agents"
     refute html =~ ">local_metrics<"
     refute html =~ "NerveCenter.Sources.HAL9000.LocalMetricsSource"
+  end
+
+  defp ok_source(device_id, source, now) do
+    %SourceSnapshot{
+      device_id: device_id,
+      source: source,
+      status: :ok,
+      observed_at: now,
+      last_ok_at: now,
+      last_error_at: nil,
+      last_error: nil,
+      probe_data: %{ok: true},
+      consecutive_failures: 0,
+      backoff_ms: 0,
+      ever_ok?: true,
+      metrics: %{},
+      data: %{}
+    }
+  end
+
+  defp seed_daisy_supervisor(now, supervisor_data) do
+    previous = SnapshotStore.snapshot(:daisy)
+
+    on_exit(fn -> SnapshotStore.put(previous) end)
+
+    SnapshotStore.put(%DeviceSnapshot{
+      device_id: :daisy,
+      label: "DAISY",
+      status: :degraded,
+      updated_at: now,
+      offline_expected: false,
+      metrics: %{},
+      sources: %{
+        ha_web_socket: ok_source(:daisy, :ha_web_socket, now),
+        ha_rest_probe: ok_source(:daisy, :ha_rest_probe, now),
+        ha_supervisor: %SourceSnapshot{
+          device_id: :daisy,
+          source: :ha_supervisor,
+          status: :error,
+          observed_at: now,
+          last_ok_at: now,
+          last_error_at: nil,
+          last_error: nil,
+          probe_data: %{ok: true},
+          consecutive_failures: 0,
+          backoff_ms: 0,
+          ever_ok?: true,
+          metrics: %{},
+          data: supervisor_data
+        }
+      }
+    })
+  end
+
+  defp bridge_payload(overrides) do
+    Map.merge(
+      %{
+        "observed_at" => "2026-06-28T13:03:42Z",
+        "supervisor" => %{
+          "version" => "2026.06.2",
+          "version_latest" => "2026.06.2",
+          "update_available" => false,
+          "healthy" => true,
+          "supported" => true,
+          "channel" => "stable"
+        },
+        "addons" => [addon_payload(%{})]
+      },
+      overrides
+    )
+  end
+
+  defp addon_payload(overrides) do
+    Map.merge(
+      %{
+        "slug" => "a0d7b954_nut",
+        "name" => "Network UPS Tools",
+        "state" => "started",
+        "version" => "0.18.0",
+        "version_latest" => "0.18.0",
+        "update_available" => false,
+        "available" => true,
+        "boot" => "auto",
+        "startup" => "system",
+        "protected" => true,
+        "network" => %{"3493/tcp" => 3493},
+        "config_summary" => %{
+          "mode" => "netserver",
+          "shutdown_host" => false,
+          "device_count" => 1,
+          "users" => [
+            %{"username_set" => true, "password_set" => true, "upsmon" => "primary"}
+          ]
+        },
+        "config_warnings" => []
+      },
+      overrides
+    )
+  end
+
+  defp ha_supervisor_context do
+    %{
+      device: Topology.get_device!(:daisy),
+      source: Topology.get_source!(:daisy, :ha_supervisor),
+      private: %{}
+    }
+  end
+
+  defp daisy_device(port) do
+    :daisy
+    |> Topology.get_device!()
+    |> Map.put(:supervisor_bridge_base_url, "http://127.0.0.1:#{port}")
+  end
+
+  defp daisy_supervisor_source do
+    Topology.get_source!(:daisy, :ha_supervisor)
+  end
+
+  defp prepare_daisy_runtime(device) do
+    DaisyRuntimeHelpers.prepare_daisy_runtime(device)
+  end
+
+  defp set_bridge_token do
+    previous = System.get_env("DAISY_SUPERVISOR_BRIDGE_TOKEN")
+    System.put_env("DAISY_SUPERVISOR_BRIDGE_TOKEN", bridge_token())
+
+    on_exit(fn ->
+      if is_nil(previous) do
+        System.delete_env("DAISY_SUPERVISOR_BRIDGE_TOKEN")
+      else
+        System.put_env("DAISY_SUPERVISOR_BRIDGE_TOKEN", previous)
+      end
+    end)
+  end
+
+  defp wait_until(fun, timeout_ms \\ 1_500) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until(fun, deadline)
+  end
+
+  defp do_wait_until(fun, deadline) do
+    if fun.() do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("condition was not met before timeout")
+      else
+        Process.sleep(25)
+        do_wait_until(fun, deadline)
+      end
+    end
   end
 end

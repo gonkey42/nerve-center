@@ -1,7 +1,10 @@
 defmodule NerveCenter.Runtime.StreamingSourceRunnerTest do
-  use ExUnit.Case, async: false
+  use NerveCenter.DataCase, async: false
 
   import ExUnit.CaptureLog
+
+  import NerveCenter.TestSupport.DaisySupervisorBridgeHelpers,
+    only: [assert_forbidden_absent: 1, forbidden_body: 0]
 
   alias NerveCenter.Messages.SourceSnapshotUpdated
   alias NerveCenter.Runtime.AppHealth
@@ -32,7 +35,12 @@ defmodule NerveCenter.Runtime.StreamingSourceRunnerTest do
     end
 
     @impl true
-    def handle_frame(_frame, context), do: {:ok, %{private: context.private}}
+    def handle_frame(_frame, context) do
+      case Map.get(context.source, :snapshot) do
+        nil -> {:ok, %{private: context.private}}
+        snapshot -> {:ok, %{private: context.private, snapshot: snapshot}}
+      end
+    end
 
     @impl true
     def handle_disconnect(reason, context) do
@@ -196,6 +204,80 @@ defmodule NerveCenter.Runtime.StreamingSourceRunnerTest do
     assert log =~ "reason=:offline"
   end
 
+  test "connection failure redacts raw auth body from failure surfaces" do
+    script =
+      start_supervised!({Agent, fn -> [{:error, {:auth, 401, forbidden_body()}}] end})
+
+    device = test_device()
+
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.source_topic(device.id, :ha_web_socket))
+
+    log =
+      capture_log(fn ->
+        start_supervised!(
+          {StreamingSourceRunner,
+           module: FakeStreamingSource,
+           device: device,
+           source: %{name: :ha_web_socket, script: script, test_pid: self()}}
+        )
+
+        assert_receive :connect_attempt, 1_000
+        assert_receive %SourceSnapshotUpdated{source_snapshot: source_snapshot}, 1_000
+        assert source_snapshot.status == :unknown
+        assert source_snapshot.last_error =~ "redacted"
+        assert_forbidden_absent(source_snapshot)
+      end)
+
+    assert_forbidden_absent(log)
+    assert_forbidden_absent(AppHealth.source_state(device.id, :ha_web_socket))
+  end
+
+  test "successful snapshots normalize observed_at to microsecond precision" do
+    {listener, port} = listen_socket()
+
+    server =
+      Task.async(fn ->
+        {:ok, socket} = :gen_tcp.accept(listener)
+        perform_websocket_handshake(socket)
+        Process.sleep(50)
+        send_text_frame(socket, %{"type" => "event"})
+        Process.sleep(250)
+        :gen_tcp.close(socket)
+        :gen_tcp.close(listener)
+      end)
+
+    observed_at = ~U[2026-06-28 13:03:42Z]
+    device = test_device()
+
+    script =
+      start_supervised!({Agent, fn -> [{:ok, websocket_spec(port)}] end})
+
+    Phoenix.PubSub.subscribe(NerveCenter.PubSub, Topology.source_topic(device.id, :ha_web_socket))
+
+    start_supervised!(
+      {StreamingSourceRunner,
+       module: FakeStreamingSource,
+       device: device,
+       source: %{
+         name: :ha_web_socket,
+         script: script,
+         test_pid: self(),
+         snapshot: %{observed_at: observed_at, data: %{message: "from frame"}}
+       }}
+    )
+
+    assert_receive :connect_attempt, 1_000
+    source_snapshot = receive_source_snapshot(&(&1.status == :ok))
+
+    assert source_snapshot.status == :ok
+    assert source_snapshot.observed_at.microsecond == {0, 6}
+
+    health = wait_until_source_health(device.id, :ha_web_socket, & &1.last_ok_at)
+    assert health.last_ok_at.microsecond == {0, 6}
+
+    Task.await(server)
+  end
+
   defp test_device do
     %{
       id: :"streaming_source_test_#{System.unique_integer([:positive])}",
@@ -264,6 +346,58 @@ defmodule NerveCenter.Runtime.StreamingSourceRunnerTest do
         do_wait_until_state(pid, fun, deadline)
       end
     end
+  end
+
+  defp wait_until_source_health(device_id, source_name, fun, timeout_ms \\ 1_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_wait_until_source_health(device_id, source_name, fun, deadline)
+  end
+
+  defp do_wait_until_source_health(device_id, source_name, fun, deadline) do
+    health = AppHealth.source_state(device_id, source_name)
+
+    if fun.(health) do
+      health
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("source health condition not met before timeout")
+      else
+        Process.sleep(25)
+        do_wait_until_source_health(device_id, source_name, fun, deadline)
+      end
+    end
+  end
+
+  defp receive_source_snapshot(fun, timeout_ms \\ 1_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_receive_source_snapshot(fun, deadline)
+  end
+
+  defp do_receive_source_snapshot(fun, deadline) do
+    remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+    receive do
+      %SourceSnapshotUpdated{source_snapshot: source_snapshot} ->
+        if fun.(source_snapshot) do
+          source_snapshot
+        else
+          do_receive_source_snapshot(fun, deadline)
+        end
+    after
+      remaining ->
+        flunk("source snapshot condition not met before timeout")
+    end
+  end
+
+  defp websocket_spec(port) do
+    %{
+      scheme: :ws,
+      transport_scheme: :http,
+      host: "127.0.0.1",
+      port: port,
+      path: "/api/websocket",
+      headers: []
+    }
   end
 
   defp listen_socket do

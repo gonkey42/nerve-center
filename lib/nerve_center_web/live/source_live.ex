@@ -322,7 +322,77 @@ defmodule NerveCenterWeb.SourceLive do
     """
   end
 
+  defp data_view(%{source: %{name: :ha_supervisor}, data: data} = assigns) when is_map(data) do
+    case addon_value(data, :addons) do
+      addons when is_list(addons) ->
+        assigns
+        |> assign(addons: addons, summary: addon_value(data, :summary) || %{})
+        |> ha_supervisor_addons_table()
+
+      _other ->
+        ha_supervisor_unavailable_view(assigns)
+    end
+  end
+
+  defp data_view(%{source: %{name: :ha_supervisor}} = assigns) do
+    ha_supervisor_unavailable_view(assigns)
+  end
+
   defp data_view(assigns) do
+    raw_data_view(assigns)
+  end
+
+  defp ha_supervisor_addons_table(assigns) do
+    ~H"""
+    <div class="space-y-4">
+      <div class="space-y-1">
+        <p class="text-xs uppercase tracking-[0.22em] text-stone-400">Summary</p>
+        <p class="mt-2 text-sm text-stone-100">{display_value(addon_value(@summary, :message))}</p>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-stone-800 text-sm">
+          <thead class="bg-stone-950/70 text-left text-xs uppercase tracking-[0.24em] text-stone-400">
+            <tr>
+              <th class="px-4 py-3">Add-on</th>
+              <th class="px-4 py-3">State</th>
+              <th class="px-4 py-3">Version</th>
+              <th class="px-4 py-3">Update</th>
+              <th class="px-4 py-3">Required</th>
+              <th class="px-4 py-3">Config Warnings</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-stone-800 text-stone-200">
+            <tr :for={addon <- @addons}>
+              <td class="px-4 py-3">
+                <p class="font-medium text-stone-100">{addon_display_name(addon)}</p>
+                <p :if={present?(addon_name_line(addon))} class="text-xs text-stone-500">
+                  {addon_name_line(addon)}
+                </p>
+                <p class="text-xs text-stone-500">{display_value(addon_value(addon, :slug))}</p>
+              </td>
+              <td class="px-4 py-3">{display_value(addon_value(addon, :state))}</td>
+              <td class="px-4 py-3">{version_display(addon)}</td>
+              <td class="px-4 py-3">{update_display(addon_value(addon, :update_available))}</td>
+              <td class="px-4 py-3">{boolean_display(addon_value(addon, :required))}</td>
+              <td class="px-4 py-3">{warning_codes(addon)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    """
+  end
+
+  defp ha_supervisor_unavailable_view(assigns) do
+    ~H"""
+    <div class="space-y-1">
+      <p class="text-xs uppercase tracking-[0.22em] text-stone-400">Summary</p>
+      <p class="mt-2 text-sm text-stone-100">Supervisor add-on data unavailable.</p>
+    </div>
+    """
+  end
+
+  defp raw_data_view(assigns) do
     ~H"""
     <pre class="overflow-x-auto whitespace-pre-wrap text-sm text-stone-200">{pretty(@data)}</pre>
     """
@@ -392,6 +462,100 @@ defmodule NerveCenterWeb.SourceLive do
       _ -> nil
     end)
   end
+
+  defp addon_display_name(addon) do
+    safe_text(addon_value(addon, :label)) ||
+      safe_text(addon_value(addon, :name)) ||
+      safe_text(addon_value(addon, :slug)) ||
+      "-"
+  end
+
+  defp addon_name_line(addon) do
+    name = safe_text(addon_value(addon, :name))
+    label = safe_text(addon_value(addon, :label))
+    display_name = addon_display_name(addon)
+
+    if present?(name) and name != label and name != display_name, do: name
+  end
+
+  defp addon_value(map, key) when is_map(map) do
+    keys =
+      cond do
+        is_atom(key) -> [key, Atom.to_string(key)]
+        is_binary(key) -> [key, existing_atom(key)]
+        true -> [key]
+      end
+
+    fetch_first(map, keys)
+  end
+
+  defp addon_value(_map, _key), do: nil
+
+  defp fetch_first(_map, []), do: nil
+  defp fetch_first(map, [nil | keys]), do: fetch_first(map, keys)
+
+  defp fetch_first(map, [key | keys]) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> fetch_first(map, keys)
+    end
+  end
+
+  defp existing_atom(key) do
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp version_display(addon) do
+    version = safe_text(addon_value(addon, :version))
+    latest = safe_text(addon_value(addon, :version_latest))
+
+    cond do
+      present?(version) and present?(latest) and version != latest -> "#{version} to #{latest}"
+      present?(version) -> version
+      present?(latest) -> latest
+      true -> "-"
+    end
+  end
+
+  defp update_display(true), do: "Available"
+  defp update_display(false), do: "-"
+  defp update_display(_value), do: "-"
+
+  defp boolean_display(true), do: "Yes"
+  defp boolean_display(false), do: "No"
+  defp boolean_display(_value), do: "-"
+
+  defp warning_codes(addon) do
+    codes =
+      addon
+      |> addon_value(:config_warnings)
+      |> List.wrap()
+      |> Enum.map(&warning_code/1)
+      |> Enum.filter(&present?/1)
+
+    case codes do
+      [] -> "-"
+      codes -> Enum.join(codes, ", ")
+    end
+  end
+
+  defp warning_code(warning) when is_map(warning),
+    do: warning |> addon_value(:code) |> safe_text()
+
+  defp warning_code(warning), do: safe_text(warning)
+
+  defp display_value(value), do: safe_text(value) || "-"
+
+  defp safe_text(nil), do: nil
+  defp safe_text(value) when is_binary(value), do: if(value == "", do: nil, else: value)
+  defp safe_text(value) when is_boolean(value), do: to_string(value)
+  defp safe_text(value) when is_atom(value), do: Atom.to_string(value)
+  defp safe_text(value) when is_number(value), do: to_string(value)
+  defp safe_text(_value), do: nil
+
+  defp present?(value), do: safe_text(value) not in [nil, ""]
 
   defp pretty(data), do: inspect(data, pretty: true, limit: :infinity)
 end

@@ -8,6 +8,7 @@ defmodule NerveCenterWeb.Display do
     frigate_preview: "Frigate Preview",
     glances: "Glances",
     ha_rest_probe: "Home Assistant REST",
+    ha_supervisor: "HA Supervisor",
     ha_web_socket: "Home Assistant Stream",
     immich: "Immich",
     launchd: "Launch Agents",

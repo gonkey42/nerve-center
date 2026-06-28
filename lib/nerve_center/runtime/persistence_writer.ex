@@ -25,6 +25,12 @@ defmodule NerveCenter.Runtime.PersistenceWriter do
   def run_maintenance(triggered_at),
     do: GenServer.cast(__MODULE__, {:run_maintenance, triggered_at})
 
+  def flush_now, do: GenServer.call(__MODULE__, :flush_now)
+
+  def queue_depth, do: GenServer.call(__MODULE__, :queue_depth)
+
+  def flush_interval_ms, do: @flush_interval_ms
+
   @impl true
   def init(_state) do
     Process.flag(:message_queue_data, :off_heap)
@@ -65,6 +71,15 @@ defmodule NerveCenter.Runtime.PersistenceWriter do
 
   def handle_cast({:run_maintenance, _triggered_at}, state) do
     {:noreply, state}
+  end
+
+  @impl true
+  def handle_call(:flush_now, _from, state) do
+    {:reply, :ok, flush_queue(state)}
+  end
+
+  def handle_call(:queue_depth, _from, state) do
+    {:reply, queue_depth(state), state}
   end
 
   @impl true

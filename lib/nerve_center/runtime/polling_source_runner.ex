@@ -6,7 +6,9 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
   alias NerveCenter.Messages.SourceSnapshotUpdated
   alias NerveCenter.Metrics.Catalog
   alias NerveCenter.Runtime.AppHealth
+  alias NerveCenter.Runtime.FailureReason
   alias NerveCenter.Runtime.PersistenceWriter
+  alias NerveCenter.Runtime.SemanticStatus
   alias NerveCenter.Runtime.SnapshotStore
   alias NerveCenter.Snapshot.SourceSnapshot
   alias NerveCenter.Topology
@@ -57,7 +59,8 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
         metrics: Map.get(source_snapshot, :metrics, %{}),
         data: Map.get(source_snapshot, :data, %{})
       },
-      last_status: Map.get(source_snapshot, :status, :unknown)
+      last_status: Map.get(source_snapshot, :status, :unknown),
+      last_semantic_status: stored_successful_semantic_status(source_snapshot)
     }
 
     {:ok, state, {:continue, :bootstrap}}
@@ -93,7 +96,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     probe_payload =
       case safe_callback(state, :probe, fn -> state.module.probe(context) end) do
         {:ok, payload} -> %{ok: true, data: payload}
-        {:error, reason} -> %{ok: false, error: inspect(reason)}
+        {:error, reason} -> %{ok: false, error: inspect(FailureReason.sanitize(reason))}
       end
 
     PersistenceWriter.enqueue_probe(%{
@@ -124,7 +127,8 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     case safe_callback(state, :normalize, fn -> state.module.normalize(raw, context) end) do
       {:ok, payload} ->
         case safe_step(state, :publish_success, fn -> do_handle_success(state, payload) end) do
-          {:ok, new_state} -> new_state
+          {:ok, {:ok, new_state}} -> new_state
+          {:ok, {:error, reason}} -> handle_failure(state, reason)
           {:error, reason} -> handle_failure(state, reason)
         end
 
@@ -135,11 +139,19 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
 
   defp handle_failure(state, reason) do
     backoff_ms = next_backoff_ms(state, reason)
-    AppHealth.record_source_failure(state.device.id, state.source.name, reason, backoff_ms)
+    sanitized_reason = FailureReason.sanitize(reason)
+
+    AppHealth.record_source_failure(
+      state.device.id,
+      state.source.name,
+      sanitized_reason,
+      backoff_ms
+    )
+
     observed_at = DateTime.utc_now()
     status = failure_status(state, reason)
 
-    maybe_log_failure(state, status, reason, backoff_ms)
+    maybe_log_failure(state, status, sanitized_reason, backoff_ms)
 
     source_snapshot = %SourceSnapshot{
       device_id: state.device.id,
@@ -148,7 +160,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
       observed_at: observed_at,
       last_ok_at: state.last_ok_at,
       last_error_at: observed_at,
-      last_error: inspect(reason),
+      last_error: inspect(sanitized_reason),
       probe_data: state.probe_data,
       consecutive_failures: state.consecutive_failures + 1,
       backoff_ms: backoff_ms,
@@ -165,13 +177,19 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
       | consecutive_failures: state.consecutive_failures + 1,
         backoff_ms: backoff_ms,
         last_error_at: observed_at,
-        last_error: inspect(reason),
+        last_error: inspect(sanitized_reason),
         last_status: status
     }
   end
 
   defp do_handle_success(state, payload) do
-    observed_at = Map.get(payload, :observed_at, DateTime.utc_now())
+    with {:ok, semantic_status} <- SemanticStatus.normalize(payload) do
+      do_publish_success(state, payload, semantic_status)
+    end
+  end
+
+  defp do_publish_success(state, payload, semantic_status) do
+    observed_at = observed_at(payload)
     normalized_metrics = Catalog.normalize(Map.get(payload, :metrics, []))
     metric_map = Map.new(normalized_metrics, &{&1.metric_id, &1.metric_value})
     data = Map.get(payload, :data, %{})
@@ -203,7 +221,7 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     source_snapshot = %SourceSnapshot{
       device_id: state.device.id,
       source: state.source.name,
-      status: :ok,
+      status: semantic_status,
       observed_at: observed_at,
       last_ok_at: observed_at,
       last_error_at: nil,
@@ -217,22 +235,45 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     }
 
     AppHealth.record_source_success(state.device.id, state.source.name, observed_at)
-    maybe_log_recovery(state)
+    maybe_log_success(state, semantic_status)
     publish_source_snapshot(state, source_snapshot, observed_at)
     schedule_poll(state.interval_ms)
 
-    %{
-      state
-      | private: Map.get(payload, :private, state.private),
-        last_ok_at: observed_at,
-        consecutive_failures: 0,
-        backoff_ms: 0,
-        last_error_at: nil,
-        ever_ok?: true,
-        last_error: nil,
-        last_payload: %{metrics: metric_map, data: data},
-        last_status: :ok
-    }
+    {:ok,
+     %{
+       state
+       | private: Map.get(payload, :private, state.private),
+         last_ok_at: observed_at,
+         consecutive_failures: 0,
+         backoff_ms: 0,
+         last_error_at: nil,
+         ever_ok?: true,
+         last_error: nil,
+         last_payload: %{metrics: metric_map, data: data},
+         last_status: semantic_status,
+         last_semantic_status: semantic_status
+     }}
+  end
+
+  defp observed_at(payload) do
+    case Map.get(payload, :observed_at) do
+      %DateTime{microsecond: {microsecond, _precision}} = observed_at ->
+        %{observed_at | microsecond: {microsecond, 6}}
+
+      _other ->
+        DateTime.utc_now()
+    end
+  end
+
+  defp stored_successful_semantic_status(source_snapshot) do
+    status = Map.get(source_snapshot, :status)
+
+    if SemanticStatus.valid?(status) and is_nil(Map.get(source_snapshot, :last_error)) and
+         is_nil(Map.get(source_snapshot, :last_error_at)) do
+      status
+    else
+      nil
+    end
   end
 
   defp publish_source_snapshot(state, source_snapshot, emitted_at) do
@@ -376,18 +417,22 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     {:ok, fun.()}
   rescue
     error ->
+      message = FailureReason.sanitize(Exception.message(error))
+
       Logger.error(
-        "polling source #{state.device.id}/#{state.source.name} #{label} crashed: #{Exception.message(error)}"
+        "polling source #{state.device.id}/#{state.source.name} #{label} crashed: #{message}"
       )
 
-      {:error, {:callback_crash, label, Exception.message(error)}}
+      {:error, {:callback_crash, label, message}}
   catch
     kind, reason ->
+      sanitized_reason = FailureReason.sanitize(reason)
+
       Logger.error(
-        "polling source #{state.device.id}/#{state.source.name} #{label} #{kind}: #{inspect(reason)}"
+        "polling source #{state.device.id}/#{state.source.name} #{label} #{kind}: #{inspect(sanitized_reason)}"
       )
 
-      {:error, {:callback_crash, label, {kind, reason}}}
+      {:error, {:callback_crash, label, {kind, sanitized_reason}}}
   end
 
   defp maybe_log_failure(state, status, reason, backoff_ms) do
@@ -400,12 +445,22 @@ defmodule NerveCenter.Runtime.PollingSourceRunner do
     end
   end
 
-  defp maybe_log_recovery(state) do
-    if state.consecutive_failures > 0 or state.last_status != :ok do
-      Logger.info(
-        "polling source #{state.device.id}/#{state.source.name} recovered after " <>
-          "#{state.consecutive_failures} failures last_error=#{state.last_error || "none"}"
-      )
+  defp maybe_log_success(state, semantic_status) do
+    cond do
+      state.consecutive_failures > 0 ->
+        Logger.info(
+          "polling source #{state.device.id}/#{state.source.name} communication recovered after " <>
+            "#{state.consecutive_failures} failures semantic_status=#{semantic_status} " <>
+            "last_error=#{state.last_error || "none"}"
+        )
+
+      state.last_semantic_status not in [nil, :ok] and semantic_status == :ok ->
+        Logger.info(
+          "polling source #{state.device.id}/#{state.source.name} semantic status recovered to ok"
+        )
+
+      true ->
+        :ok
     end
   end
 
