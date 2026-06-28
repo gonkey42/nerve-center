@@ -7,7 +7,10 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     only: [listen_socket: 0, send_response: 2, serve_requests: 3]
 
   import NerveCenter.TestSupport.PersistenceWriterHelpers,
-    only: [clear_persistence_writer_queues: 0, wait_for_persistence_writer_drain: 0]
+    only: [
+      assert_persistence_count_stable: 3,
+      clear_persistence_writer_queues: 0
+    ]
 
   alias NerveCenter.Messages.SourceSnapshotUpdated
   alias NerveCenter.Persistence.DeviceEvent
@@ -744,14 +747,11 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     assert_receive %SourceSnapshotUpdated{source_snapshot: second_snapshot}, 1_000
     assert second_snapshot.status == :error
 
-    wait_for_persistence_writer_drain()
-
-    events =
-      DeviceEvent
-      |> where([event], event.device_id == "daisy" and event.source == "ha_supervisor")
-      |> Repo.all()
-
-    assert Enum.count(events, &(&1.event_type == "ha_supervisor_addon_problem")) == 1
+    assert_persistence_count_stable(
+      "ha_supervisor_addon_problem events",
+      fn -> count_ha_supervisor_events("ha_supervisor_addon_problem") end,
+      1
+    )
 
     Task.await(server)
   end
