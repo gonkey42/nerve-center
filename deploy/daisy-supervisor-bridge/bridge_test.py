@@ -28,6 +28,21 @@ class ExplodingSupervisor:
         raise AssertionError(f"Supervisor must not be called for {slug}")
 
 
+class ShapedSupervisor:
+    def __init__(self, supervisor_info, addon_info):
+        self._supervisor_info = supervisor_info
+        self._addon_info = addon_info
+
+    def supervisor_info(self):
+        return self._supervisor_info
+
+    def addons(self):
+        return []
+
+    def addon_info(self, slug):
+        return self._addon_info
+
+
 class BridgeStartupAndAuthTest(unittest.TestCase):
     def assert_error_response(self, request, expected_status, expected_body):
         with self.assertRaises(urllib.error.HTTPError) as raised:
@@ -94,6 +109,34 @@ class BridgeStartupAndAuthTest(unittest.TestCase):
         self.assertNotIn("<html", body_text.lower())
         return body_text
 
+    def supervisor_response_server(self, body, status=200):
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+
+        def serve_once():
+            try:
+                connection, _address = listener.accept()
+                with connection:
+                    connection.recv(4096)
+                    response = (
+                        f"HTTP/1.1 {status} OK\r\n"
+                        "Content-Type: application/json\r\n"
+                        f"Content-Length: {len(body)}\r\n"
+                        "Connection: close\r\n"
+                        "\r\n"
+                    ).encode("ascii") + body
+                    connection.sendall(response)
+            finally:
+                listener.close()
+
+        thread = threading.Thread(target=serve_once, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 2)
+        self.addCleanup(listener.close)
+        return f"http://127.0.0.1:{port}"
+
     def test_validate_options_rejects_blank_token(self):
         with self.assertRaisesRegex(run.ConfigError, "bridge token is required"):
             run.validate_options({"token": "", "watched_addons": ["a0d7b954_nut"]})
@@ -123,6 +166,7 @@ class BridgeStartupAndAuthTest(unittest.TestCase):
             f"{STRONG_TOKEN}\n",
             f"{STRONG_TOKEN[:8]}\r{STRONG_TOKEN[8:]}",
             f"{STRONG_TOKEN[:8]}\x00{STRONG_TOKEN[8:]}",
+            f"{STRONG_TOKEN[:8]}\x85{STRONG_TOKEN[8:]}",
         ]
 
         for token in invalid_tokens:
@@ -219,6 +263,62 @@ class BridgeStartupAndAuthTest(unittest.TestCase):
             with self.subTest(authorization=authorization):
                 request = self.auth_request(port, "/health", authorization=authorization)
                 self.assert_error_response(request, 401, {"error": "unauthorized"})
+
+        duplicate_authorization_request = (
+            b"GET /health HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Connection: close\r\n"
+            b"Authorization: Bearer 0123456789abcdef0123456789abcdef\r\n"
+            b"Authorization: Bearer raw-nut-password-should-not-leak\r\n"
+            b"\r\n"
+        )
+        response = self.raw_http_request(port, duplicate_authorization_request)
+        body = self.assert_raw_json_response(response, 401, {"error": "unauthorized"})
+        self.assertNotIn(STRONG_TOKEN, body)
+        self.assertNotIn(SENSITIVE_VALUE, body)
+
+    def test_supervisor_client_rejects_invalid_json_and_non_object_payloads(self):
+        invalid_json_url = self.supervisor_response_server(b"{")
+        with self.assertRaises(run.SupervisorError):
+            run.SupervisorClient("supervisor-token", base_url=invalid_json_url).supervisor_info()
+
+        non_object_url = self.supervisor_response_server(b'["not", "an", "object"]')
+        with self.assertRaises(run.SupervisorError):
+            run.SupervisorClient("supervisor-token", base_url=non_object_url).supervisor_info()
+
+    def test_build_health_payload_rejects_unexpected_supervisor_shapes(self):
+        with self.assertRaises(run.SupervisorError):
+            run.build_health_payload(
+                ShapedSupervisor(
+                    supervisor_info=["not", "an", "object"],
+                    addon_info={"state": "started"},
+                ),
+                ["a0d7b954_nut"],
+            )
+
+        with self.assertRaises(run.SupervisorError):
+            run.build_health_payload(
+                ShapedSupervisor(
+                    supervisor_info={"version": "2026.06.2", "healthy": True, "supported": True},
+                    addon_info=["not", "an", "object"],
+                ),
+                ["a0d7b954_nut"],
+            )
+
+    def test_malformed_supervisor_payload_returns_sanitized_502(self):
+        app = run.BridgeApp(
+            options={"token": STRONG_TOKEN, "watched_addons": ["a0d7b954_nut"]},
+            supervisor=ShapedSupervisor(
+                supervisor_info={"version": "2026.06.2", "healthy": True, "supported": True},
+                addon_info=["not", "an", "object"],
+            ),
+        )
+        server, port = run.start_test_server(app)
+        self.addCleanup(server.shutdown)
+
+        request = self.auth_request(port, "/health", authorization=f"Bearer {STRONG_TOKEN}")
+        body = self.assert_error_response(request, 502, {"error": "supervisor_unavailable"})
+        self.assertNotIn(STRONG_TOKEN, body)
 
     def test_unsupported_methods_authenticate_before_method_handling(self):
         port = self.start_exploding_app()

@@ -56,13 +56,15 @@ class SupervisorClient:
         )
         try:
             with urllib.request.urlopen(request, timeout=5) as response:
-                return json.load(response)
+                payload = json.load(response)
         except urllib.error.HTTPError as error:
             if error.code in (401, 403):
                 raise SupervisorAuthError("Supervisor request unauthorized") from None
             raise SupervisorError("Supervisor request failed") from None
-        except urllib.error.URLError:
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
             raise SupervisorError("Supervisor request failed") from None
+
+        return _require_object(payload)
 
 
 class FakeSupervisorClient:
@@ -130,11 +132,11 @@ def validate_options(options):
 
 
 def build_health_payload(supervisor, watched_addons):
-    supervisor_info = supervisor.supervisor_info()
+    supervisor_info = _require_object(supervisor.supervisor_info())
     addon_payloads = []
 
     for slug in watched_addons:
-        addon_info = supervisor.addon_info(slug)
+        addon_info = _require_object(supervisor.addon_info(slug))
         addon_payloads.append({"slug": slug, "state": _string_or_none(addon_info.get("state"))})
 
     return {
@@ -218,9 +220,10 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
 
     def _authorized(self):
         expected = f"Bearer {self.server.app.options['token']}"
-        authorization = self.headers.get("Authorization")
-        if authorization is None:
+        authorizations = self.headers.get_all("Authorization", [])
+        if len(authorizations) != 1:
             return False
+        authorization = authorizations[0]
         return hmac.compare_digest(authorization.encode("utf-8"), expected.encode("utf-8"))
 
     def _send_json(self, status, payload):
@@ -256,6 +259,7 @@ def start_server(app, host="0.0.0.0", port=9567):
 
 def start_test_server(app):
     server = start_server(app, host="127.0.0.1", port=0)
+    # socketserver imports threading internally; use it to honor the Task 1 import whitelist.
     thread = socketserver.threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, server.server_address[1]
@@ -273,7 +277,13 @@ def main(options_path="/data/options.json", host="0.0.0.0", port=9567):
 
 
 def _contains_control_character(value):
-    return any(ord(character) < 32 or ord(character) == 127 for character in value)
+    return any(not character.isprintable() for character in value)
+
+
+def _require_object(payload):
+    if not isinstance(payload, dict):
+        raise SupervisorError("Supervisor response malformed")
+    return payload
 
 
 def _string_or_none(value):
