@@ -565,6 +565,59 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     end
   end
 
+  test "normalize only preserves exact boolean password_set config flags" do
+    exact_string_value = "hunter2"
+    exact_atom_value = "swordfish"
+    dashed_value = "opensesame"
+    compact_value = "letmein"
+    dashed_atom_value = "correct-horse"
+    compact_atom_value = "battery-staple"
+
+    payload =
+      normalize!(
+        bridge_payload(%{
+          "addons" => [
+            addon_payload(%{
+              "config_summary" => %{
+                "password_set" => true,
+                :password_set => false,
+                "exact_string_non_boolean" => %{"password_set" => exact_string_value},
+                "exact_atom_non_boolean" => %{password_set: exact_atom_value},
+                "password-set" => dashed_value,
+                "passwordset" => compact_value,
+                :"password-set" => dashed_atom_value,
+                :passwordset => compact_atom_value
+              }
+            })
+          ]
+        })
+      )
+
+    summary = addon(payload, "a0d7b954_nut").config_summary
+
+    assert summary["password_set"] == true
+    assert summary[:password_set] == false
+    assert summary["exact_string_non_boolean"]["password_set"] == "[REDACTED]"
+    assert summary["exact_atom_non_boolean"].password_set == "[REDACTED]"
+    assert summary["password-set"] == "[REDACTED]"
+    assert summary["passwordset"] == "[REDACTED]"
+    assert summary[:"password-set"] == "[REDACTED]"
+    assert summary[:passwordset] == "[REDACTED]"
+
+    rendered = inspect(payload)
+
+    for opaque_value <- [
+          exact_string_value,
+          exact_atom_value,
+          dashed_value,
+          compact_value,
+          dashed_atom_value,
+          compact_atom_value
+        ] do
+      refute rendered =~ opaque_value
+    end
+  end
+
   test "normalize handles arbitrary map keys when detecting sensitive values" do
     private_key = "opaque-kilo-111"
     credential = "opaque-lima-222"

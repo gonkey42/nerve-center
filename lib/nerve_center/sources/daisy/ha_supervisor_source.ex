@@ -7,7 +7,6 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
   alias NerveCenter.Sources.Support
 
   @safe_config_warning_codes ~w(nut_username_blank nut_password_blank nut_port_unmapped)
-  @safe_sensitive_key_names ~w(passwordset)
   @sensitive_key_markers [
     "auth",
     "credential",
@@ -629,10 +628,15 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
 
   defp sanitize(value) when is_map(value) do
     Map.new(value, fn {key, nested_value} ->
-      if sensitive_key?(key) do
-        {key, "[REDACTED]"}
-      else
-        {key, sanitize(nested_value)}
+      cond do
+        safe_password_set_flag?(key, nested_value) ->
+          {key, nested_value}
+
+        sensitive_key?(key) ->
+          {key, "[REDACTED]"}
+
+        true ->
+          {key, sanitize(nested_value)}
       end
     end)
   end
@@ -670,9 +674,13 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
   defp sensitive_key?(key) do
     normalized = normalize_key(key)
 
-    normalized not in @safe_sensitive_key_names and
-      Enum.any?(@sensitive_key_markers, &String.contains?(normalized, &1))
+    Enum.any?(@sensitive_key_markers, &String.contains?(normalized, &1))
   end
+
+  defp safe_password_set_flag?(key, value) when key in ["password_set", :password_set],
+    do: is_boolean(value)
+
+  defp safe_password_set_flag?(_key, _value), do: false
 
   defp normalize_key(key) when is_binary(key), do: normalize_key_string(key)
   defp normalize_key(key) when is_atom(key), do: key |> Atom.to_string() |> normalize_key_string()
