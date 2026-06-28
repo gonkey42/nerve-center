@@ -6,6 +6,8 @@ Read-only Home Assistant local add-on that exposes sanitized Supervisor health f
 
 The bridge keeps the Supervisor token inside the add-on and never returns raw Supervisor responses, add-on options, add-on logs, request headers, passwords, usernames, or secret-like fields. Health responses are rebuilt from allowlisted fields only.
 
+Do not record or commit real secret values, captured Daisy `/data/options.json` contents, raw Supervisor responses, or raw add-on config in this README, tests, PR bodies, logs, screenshots, or other repository artifacts.
+
 The only public route is authenticated `GET /health`. Mutating methods and Supervisor-like paths are not proxied. Error bodies are sanitized for `401`, `404`, `405`, `500`, and `502`.
 
 Generate a bridge token with:
