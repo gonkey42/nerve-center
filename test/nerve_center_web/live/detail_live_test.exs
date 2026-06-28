@@ -67,75 +67,49 @@ defmodule NerveCenterWeb.DetailLiveTest do
     conn: conn
   } do
     now = DateTime.utc_now()
-    previous = SnapshotStore.snapshot(:daisy)
 
-    on_exit(fn -> SnapshotStore.put(previous) end)
-
-    SnapshotStore.put(%DeviceSnapshot{
-      device_id: :daisy,
-      label: "DAISY",
-      status: :degraded,
-      updated_at: now,
-      offline_expected: false,
-      metrics: %{},
-      sources: %{
-        ha_web_socket: ok_source(:daisy, :ha_web_socket, now),
-        ha_rest_probe: ok_source(:daisy, :ha_rest_probe, now),
-        ha_supervisor: %SourceSnapshot{
-          device_id: :daisy,
-          source: :ha_supervisor,
-          status: :error,
-          observed_at: now,
-          last_ok_at: now,
-          last_error_at: nil,
-          last_error: nil,
-          probe_data: %{ok: true},
-          consecutive_failures: 0,
-          backoff_ms: 0,
-          ever_ok?: true,
-          metrics: %{},
-          data: %{
-            "summary" => %{
-              "status" => "error",
-              "problem_count" => 2,
-              "required_unhealthy_count" => 1,
-              "optional_unhealthy_count" => 0,
-              "update_available_count" => 1,
-              "message" => "Network UPS Tools has nut_username_blank and nut_password_blank."
-            },
-            "supervisor" => %{
-              "healthy" => true,
-              "supported" => true,
-              "token" => "supervisor-token-should-not-leak"
-            },
-            "addons" => [
+    seed_daisy_supervisor(
+      now,
+      %{
+        "summary" => %{
+          "status" => "error",
+          "problem_count" => 2,
+          "required_unhealthy_count" => 1,
+          "optional_unhealthy_count" => 0,
+          "update_available_count" => 1,
+          "message" => "Network UPS Tools has nut_username_blank and nut_password_blank."
+        },
+        "supervisor" => %{
+          "healthy" => true,
+          "supported" => true,
+          "token" => "supervisor-token-should-not-leak"
+        },
+        "addons" => [
+          %{
+            "slug" => "a0d7b954_nut",
+            "label" => "Network UPS Tools",
+            "name" => "Network UPS Tools",
+            "required" => true,
+            "state" => "stopped",
+            "status" => "error",
+            "version" => "0.18.0",
+            "version_latest" => "0.19.0",
+            "update_available" => true,
+            "config_summary" => %{"password" => "raw-nut-password-should-not-leak"},
+            "config_warnings" => [
               %{
-                "slug" => "a0d7b954_nut",
-                "label" => "Network UPS Tools",
-                "name" => "Network UPS Tools",
-                "required" => true,
-                "state" => "stopped",
-                "status" => "error",
-                "version" => "0.18.0",
-                "version_latest" => "0.19.0",
-                "update_available" => true,
-                "config_summary" => %{"password" => "raw-nut-password-should-not-leak"},
-                "config_warnings" => [
-                  %{
-                    "code" => "nut_username_blank",
-                    "detail" => "supervisor-token-should-not-leak"
-                  },
-                  %{
-                    "code" => "nut_password_blank",
-                    "detail" => "raw-nut-password-should-not-leak"
-                  }
-                ]
+                "code" => "nut_username_blank",
+                "detail" => "supervisor-token-should-not-leak"
+              },
+              %{
+                "code" => "nut_password_blank",
+                "detail" => "raw-nut-password-should-not-leak"
               }
             ]
           }
-        }
+        ]
       }
-    })
+    )
 
     {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_supervisor")
 
@@ -147,6 +121,89 @@ defmodule NerveCenterWeb.DetailLiveTest do
     assert html =~ "0.19.0"
     assert html =~ "Config Warnings"
     assert html =~ "nut_username_blank"
+    assert html =~ "nut_password_blank"
+    refute html =~ "raw-nut-password-should-not-leak"
+    refute html =~ "supervisor-token-should-not-leak"
+  end
+
+  test "source detail renders safe ha supervisor fallback when addons are missing", %{conn: conn} do
+    now = DateTime.utc_now()
+
+    seed_daisy_supervisor(now, %{
+      "summary" => %{"message" => "supervisor-token-should-not-leak"},
+      "supervisor" => %{"token" => "supervisor-token-should-not-leak"},
+      "config_summary" => %{"password" => "raw-nut-password-should-not-leak"},
+      "config_warnings" => [
+        %{
+          "code" => "nut_username_blank",
+          "detail" => "raw-nut-password-should-not-leak"
+        }
+      ]
+    })
+
+    {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_supervisor")
+
+    assert html =~ "DAISY / HA Supervisor"
+    assert html =~ "Supervisor add-on data unavailable."
+    refute html =~ "<pre"
+    refute html =~ "nut_username_blank"
+    refute html =~ "raw-nut-password-should-not-leak"
+    refute html =~ "supervisor-token-should-not-leak"
+  end
+
+  test "source detail renders safe ha supervisor fallback when addons are malformed", %{
+    conn: conn
+  } do
+    now = DateTime.utc_now()
+
+    seed_daisy_supervisor(now, %{
+      "summary" => %{"message" => "raw-nut-password-should-not-leak"},
+      "supervisor" => %{"token" => "supervisor-token-should-not-leak"},
+      "addons" => %{
+        "a0d7b954_nut" => %{
+          "label" => "Network UPS Tools",
+          "config_summary" => %{"password" => "raw-nut-password-should-not-leak"}
+        }
+      }
+    })
+
+    {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_supervisor")
+
+    assert html =~ "DAISY / HA Supervisor"
+    assert html =~ "Supervisor add-on data unavailable."
+    refute html =~ "<pre"
+    refute html =~ "Network UPS Tools"
+    refute html =~ "raw-nut-password-should-not-leak"
+    refute html =~ "supervisor-token-should-not-leak"
+  end
+
+  test "source detail safely degrades non-scalar ha supervisor addon fields", %{conn: conn} do
+    now = DateTime.utc_now()
+
+    seed_daisy_supervisor(now, %{
+      "summary" => %{"message" => ["raw-nut-password-should-not-leak"]},
+      "addons" => [
+        %{
+          "slug" => "a0d7b954_nut",
+          "label" => %{"secret" => "raw-nut-password-should-not-leak"},
+          "name" => ["supervisor-token-should-not-leak"],
+          "required" => %{"bad" => true},
+          "state" => %{"bad" => "supervisor-token-should-not-leak"},
+          "version" => ["0.18.0"],
+          "version_latest" => %{"bad" => "0.19.0"},
+          "update_available" => %{"bad" => true},
+          "config_warnings" => [
+            %{"code" => %{"bad" => "supervisor-token-should-not-leak"}},
+            %{"code" => "nut_password_blank"}
+          ]
+        }
+      ]
+    })
+
+    {:ok, _view, html} = live(conn, ~p"/sources/daisy/ha_supervisor")
+
+    assert html =~ "DAISY / HA Supervisor"
+    assert html =~ "a0d7b954_nut"
     assert html =~ "nut_password_blank"
     refute html =~ "raw-nut-password-should-not-leak"
     refute html =~ "supervisor-token-should-not-leak"
@@ -206,5 +263,39 @@ defmodule NerveCenterWeb.DetailLiveTest do
       metrics: %{},
       data: %{}
     }
+  end
+
+  defp seed_daisy_supervisor(now, supervisor_data) do
+    previous = SnapshotStore.snapshot(:daisy)
+
+    on_exit(fn -> SnapshotStore.put(previous) end)
+
+    SnapshotStore.put(%DeviceSnapshot{
+      device_id: :daisy,
+      label: "DAISY",
+      status: :degraded,
+      updated_at: now,
+      offline_expected: false,
+      metrics: %{},
+      sources: %{
+        ha_web_socket: ok_source(:daisy, :ha_web_socket, now),
+        ha_rest_probe: ok_source(:daisy, :ha_rest_probe, now),
+        ha_supervisor: %SourceSnapshot{
+          device_id: :daisy,
+          source: :ha_supervisor,
+          status: :error,
+          observed_at: now,
+          last_ok_at: now,
+          last_error_at: nil,
+          last_error: nil,
+          probe_data: %{ok: true},
+          consecutive_failures: 0,
+          backoff_ms: 0,
+          ever_ok?: true,
+          metrics: %{},
+          data: supervisor_data
+        }
+      }
+    })
   end
 end

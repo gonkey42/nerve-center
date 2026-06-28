@@ -14,7 +14,7 @@ defmodule NerveCenterWeb.DashboardLiveTest do
              "Live state for the enabled devices, sourced locally, across the tailnet, and from the LAN gateway without any write actions."
   end
 
-  test "daisy dashboard card degrades instead of offline when ha supervisor is semantic error", %{
+  test "daisy dashboard card renders degraded snapshot with ha supervisor source error", %{
     conn: conn
   } do
     now = DateTime.utc_now()
@@ -79,6 +79,8 @@ defmodule NerveCenterWeb.DashboardLiveTest do
 
     assert html =~ "DAISY"
     assert html =~ "degraded"
+    assert html =~ "Home Assistant REST: ok"
+    assert html =~ "Home Assistant Stream: ok"
     assert html =~ "HA Supervisor: error"
     refute html =~ "HA Supervisor: offline"
     refute html =~ "raw-nut-password-should-not-leak"

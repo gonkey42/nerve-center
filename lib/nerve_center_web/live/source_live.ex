@@ -330,8 +330,12 @@ defmodule NerveCenterWeb.SourceLive do
         |> ha_supervisor_addons_table()
 
       _other ->
-        raw_data_view(assigns)
+        ha_supervisor_unavailable_view(assigns)
     end
+  end
+
+  defp data_view(%{source: %{name: :ha_supervisor}} = assigns) do
+    ha_supervisor_unavailable_view(assigns)
   end
 
   defp data_view(assigns) do
@@ -375,6 +379,15 @@ defmodule NerveCenterWeb.SourceLive do
           </tbody>
         </table>
       </div>
+    </div>
+    """
+  end
+
+  defp ha_supervisor_unavailable_view(assigns) do
+    ~H"""
+    <div class="space-y-1">
+      <p class="text-xs uppercase tracking-[0.22em] text-stone-400">Summary</p>
+      <p class="mt-2 text-sm text-stone-100">Supervisor add-on data unavailable.</p>
     </div>
     """
   end
@@ -451,14 +464,18 @@ defmodule NerveCenterWeb.SourceLive do
   end
 
   defp addon_display_name(addon) do
-    addon_value(addon, :label) || addon_value(addon, :name) || addon_value(addon, :slug) || "-"
+    safe_text(addon_value(addon, :label)) ||
+      safe_text(addon_value(addon, :name)) ||
+      safe_text(addon_value(addon, :slug)) ||
+      "-"
   end
 
   defp addon_name_line(addon) do
-    name = addon_value(addon, :name)
-    label = addon_value(addon, :label)
+    name = safe_text(addon_value(addon, :name))
+    label = safe_text(addon_value(addon, :label))
+    display_name = addon_display_name(addon)
 
-    if present?(name) and name != label, do: name
+    if present?(name) and name != label and name != display_name, do: name
   end
 
   defp addon_value(map, key) when is_map(map) do
@@ -491,8 +508,8 @@ defmodule NerveCenterWeb.SourceLive do
   end
 
   defp version_display(addon) do
-    version = addon_value(addon, :version)
-    latest = addon_value(addon, :version_latest)
+    version = safe_text(addon_value(addon, :version))
+    latest = safe_text(addon_value(addon, :version_latest))
 
     cond do
       present?(version) and present?(latest) and version != latest -> "#{version} to #{latest}"
@@ -524,17 +541,21 @@ defmodule NerveCenterWeb.SourceLive do
     end
   end
 
-  defp warning_code(warning) when is_map(warning), do: addon_value(warning, :code)
-  defp warning_code(warning) when is_atom(warning), do: Atom.to_string(warning)
-  defp warning_code(warning) when is_binary(warning), do: warning
-  defp warning_code(_warning), do: nil
+  defp warning_code(warning) when is_map(warning),
+    do: warning |> addon_value(:code) |> safe_text()
 
-  defp display_value(value) when is_binary(value), do: value
-  defp display_value(value) when is_atom(value), do: Atom.to_string(value)
-  defp display_value(value) when is_number(value), do: to_string(value)
-  defp display_value(_value), do: "-"
+  defp warning_code(warning), do: safe_text(warning)
 
-  defp present?(value), do: value not in [nil, ""]
+  defp display_value(value), do: safe_text(value) || "-"
+
+  defp safe_text(nil), do: nil
+  defp safe_text(value) when is_binary(value), do: if(value == "", do: nil, else: value)
+  defp safe_text(value) when is_boolean(value), do: to_string(value)
+  defp safe_text(value) when is_atom(value), do: Atom.to_string(value)
+  defp safe_text(value) when is_number(value), do: to_string(value)
+  defp safe_text(_value), do: nil
+
+  defp present?(value), do: safe_text(value) not in [nil, ""]
 
   defp pretty(data), do: inspect(data, pretty: true, limit: :infinity)
 end
