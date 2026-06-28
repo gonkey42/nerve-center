@@ -442,6 +442,61 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
            end)
   end
 
+  test "normalize sanitizes bridge scalar strings before data problems fingerprints events and logs" do
+    parent = self()
+
+    log =
+      capture_log(fn ->
+        assert {:ok, payload} =
+                 @source.normalize(
+                   bridge_payload(%{
+                     "supervisor" =>
+                       bridge_payload()["supervisor"]
+                       |> Map.put("version", "2026.06.2 #{@forbidden_bridge_token}")
+                       |> Map.put("version_latest", "Traceback #{@forbidden_supervisor_token}")
+                       |> Map.put("channel", "stable #{@forbidden_password}"),
+                     "addons" => [
+                       addon_payload(%{
+                         "name" => "Network UPS Tools #{@forbidden_supervisor_token}",
+                         "state" => "Traceback Bearer #{@forbidden_bridge_token}",
+                         "boot" => "auto #{@forbidden_password}",
+                         "startup" => "Authorization: Bearer #{@forbidden_bridge_token}",
+                         "version" => "0.18.0 #{@forbidden_bridge_token}",
+                         "version_latest" => "Traceback #{@forbidden_supervisor_token}"
+                       })
+                     ]
+                   }),
+                   context()
+                 )
+
+        send(parent, {:payload, payload})
+      end)
+
+    assert_receive {:payload, payload}
+
+    assert payload.status == :error
+    assert addon(payload, "a0d7b954_nut").status == :error
+    assert has_problem?(payload, "a0d7b954_nut", :required_addon_unhealthy)
+
+    assert payload.private.ha_supervisor_addon_states["a0d7b954_nut"] !=
+             "Traceback Bearer #{@forbidden_bridge_token}"
+
+    assert [%{fingerprint: fingerprint}] = payload.events
+    assert fingerprint =~ "a0d7b954_nut:required_addon_unhealthy:"
+
+    for output <- [
+          inspect(payload.data.supervisor),
+          inspect(addon(payload, "a0d7b954_nut")),
+          inspect(payload.events),
+          inspect(payload.private),
+          inspect(payload),
+          log
+        ],
+        forbidden <- forbidden_fragments() do
+      refute output =~ forbidden
+    end
+  end
+
   test "normalize emits events only on problem fingerprint changes" do
     first = normalize!(bridge_payload(%{"addons" => [addon_payload(%{"state" => "error"})]}))
 
@@ -515,6 +570,37 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     assert fingerprint != legacy_fingerprint
 
     for output <- [fingerprint, inspect(payload.events), inspect(payload), log],
+        forbidden <- forbidden_fragments() do
+      refute output =~ forbidden
+    end
+  end
+
+  test "normalize dedupes active legacy unsanitized fingerprints against current sanitized problems" do
+    legacy_fingerprint =
+      "a0d7b954_nut:required_addon_unhealthy:Traceback Bearer #{@forbidden_bridge_token}"
+
+    private = %{
+      ha_supervisor_problem_fingerprints: MapSet.new([legacy_fingerprint])
+    }
+
+    payload =
+      normalize!(
+        bridge_payload(%{
+          "addons" => [
+            addon_payload(%{"state" => "Traceback Bearer #{@forbidden_bridge_token}"})
+          ]
+        }),
+        nil,
+        private
+      )
+
+    assert payload.status == :error
+    assert payload.events == []
+    assert [fingerprint] = MapSet.to_list(payload.private.ha_supervisor_problem_fingerprints)
+    assert fingerprint != legacy_fingerprint
+    assert fingerprint =~ "a0d7b954_nut:required_addon_unhealthy:"
+
+    for output <- [fingerprint, inspect(payload.private), inspect(payload)],
         forbidden <- forbidden_fragments() do
       refute output =~ forbidden
     end

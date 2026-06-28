@@ -160,12 +160,12 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
 
   defp normalize_supervisor(supervisor) do
     normalized = %{
-      version: value(supervisor, :version),
-      version_latest: value(supervisor, :version_latest),
+      version: sanitize(value(supervisor, :version)),
+      version_latest: sanitize(value(supervisor, :version_latest)),
       update_available: value(supervisor, :update_available) == true,
       healthy: value(supervisor, :healthy),
       supported: value(supervisor, :supported),
-      channel: value(supervisor, :channel)
+      channel: sanitize(value(supervisor, :channel))
     }
 
     Map.put(normalized, :problems, supervisor_problems(normalized))
@@ -237,14 +237,14 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
   defp normalize_addon(config, observed) do
     required = config_required?(config)
     expected_states = config_value(config, :expected_states, [])
-    state = value(observed, :state)
+    state = sanitize(value(observed, :state))
     available = value(observed, :available, true)
     warnings = normalize_warnings(value(observed, :config_warnings, []))
 
     base = %{
       slug: config_value(config, :slug),
       label: config_value(config, :label),
-      name: value(observed, :name),
+      name: sanitize(value(observed, :name)),
       required: required,
       expected_states: expected_states,
       config_checks: config_value(config, :config_checks, []),
@@ -252,12 +252,12 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
       observed?: true,
       drift?: false,
       available: available,
-      boot: value(observed, :boot),
-      startup: value(observed, :startup),
+      boot: sanitize(value(observed, :boot)),
+      startup: sanitize(value(observed, :startup)),
       protected: value(observed, :protected),
       network: sanitize(value(observed, :network, %{})),
-      version: value(observed, :version),
-      version_latest: value(observed, :version_latest),
+      version: sanitize(value(observed, :version)),
+      version_latest: sanitize(value(observed, :version_latest)),
       update_available: value(observed, :update_available) == true,
       config_summary: sanitize(value(observed, :config_summary, %{})),
       config_warnings: warnings
@@ -402,11 +402,16 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
     |> Map.get(:private, %{})
     |> Map.get(:ha_supervisor_problem_fingerprints, MapSet.new())
     |> to_mapset()
+    |> sanitize_fingerprints()
   end
 
   defp to_mapset(%MapSet{} = value), do: value
   defp to_mapset(value) when is_list(value), do: MapSet.new(value)
   defp to_mapset(_value), do: MapSet.new()
+
+  defp sanitize_fingerprints(fingerprints) do
+    MapSet.new(fingerprints, &sanitize/1)
+  end
 
   defp transition_events(previous_fingerprints, current_fingerprints, problem_index, context) do
     new_events =
