@@ -322,12 +322,23 @@ defmodule NerveCenterWeb.SourceLive do
     """
   end
 
-  defp data_view(
-         %{source: %{name: :ha_supervisor}, data: %{addons: addons, summary: summary}} = assigns
-       )
-       when is_list(addons) do
-    assigns = assign(assigns, addons: addons, summary: summary)
+  defp data_view(%{source: %{name: :ha_supervisor}, data: data} = assigns) when is_map(data) do
+    case addon_value(data, :addons) do
+      addons when is_list(addons) ->
+        assigns
+        |> assign(addons: addons, summary: addon_value(data, :summary) || %{})
+        |> ha_supervisor_addons_table()
 
+      _other ->
+        raw_data_view(assigns)
+    end
+  end
+
+  defp data_view(assigns) do
+    raw_data_view(assigns)
+  end
+
+  defp ha_supervisor_addons_table(assigns) do
     ~H"""
     <div class="space-y-4">
       <div class="space-y-1">
@@ -368,7 +379,7 @@ defmodule NerveCenterWeb.SourceLive do
     """
   end
 
-  defp data_view(assigns) do
+  defp raw_data_view(assigns) do
     ~H"""
     <pre class="overflow-x-auto whitespace-pre-wrap text-sm text-stone-200">{pretty(@data)}</pre>
     """

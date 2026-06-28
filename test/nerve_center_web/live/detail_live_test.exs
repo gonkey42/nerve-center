@@ -95,33 +95,36 @@ defmodule NerveCenterWeb.DetailLiveTest do
           ever_ok?: true,
           metrics: %{},
           data: %{
-            summary: %{
-              status: :error,
-              problem_count: 2,
-              required_unhealthy_count: 1,
-              optional_unhealthy_count: 0,
-              update_available_count: 1,
-              message: "Network UPS Tools has nut_username_blank and nut_password_blank."
+            "summary" => %{
+              "status" => "error",
+              "problem_count" => 2,
+              "required_unhealthy_count" => 1,
+              "optional_unhealthy_count" => 0,
+              "update_available_count" => 1,
+              "message" => "Network UPS Tools has nut_username_blank and nut_password_blank."
             },
-            supervisor: %{
-              healthy: true,
-              supported: true,
-              token: "supervisor-token-should-not-leak"
+            "supervisor" => %{
+              "healthy" => true,
+              "supported" => true,
+              "token" => "supervisor-token-should-not-leak"
             },
-            addons: [
+            "addons" => [
               %{
-                slug: "a0d7b954_nut",
-                label: "Network UPS Tools",
-                name: "Network UPS Tools",
-                required: true,
-                state: "stopped",
-                status: :error,
-                version: "0.18.0",
-                version_latest: "0.19.0",
-                update_available: true,
-                config_summary: %{"password" => "raw-nut-password-should-not-leak"},
-                config_warnings: [
-                  %{code: "nut_username_blank", detail: "supervisor-token-should-not-leak"},
+                "slug" => "a0d7b954_nut",
+                "label" => "Network UPS Tools",
+                "name" => "Network UPS Tools",
+                "required" => true,
+                "state" => "stopped",
+                "status" => "error",
+                "version" => "0.18.0",
+                "version_latest" => "0.19.0",
+                "update_available" => true,
+                "config_summary" => %{"password" => "raw-nut-password-should-not-leak"},
+                "config_warnings" => [
+                  %{
+                    "code" => "nut_username_blank",
+                    "detail" => "supervisor-token-should-not-leak"
+                  },
                   %{
                     "code" => "nut_password_blank",
                     "detail" => "raw-nut-password-should-not-leak"
@@ -142,6 +145,7 @@ defmodule NerveCenterWeb.DetailLiveTest do
     assert html =~ "stopped"
     assert html =~ "0.18.0"
     assert html =~ "0.19.0"
+    assert html =~ "Config Warnings"
     assert html =~ "nut_username_blank"
     assert html =~ "nut_password_blank"
     refute html =~ "raw-nut-password-should-not-leak"
