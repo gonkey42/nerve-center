@@ -280,34 +280,51 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
                 return
             if not self.parse_request():
                 return
-            self._handle_bridge_request()
+            self._safe_handle_bridge_request()
             self.wfile.flush()
         except TimeoutError:
             self.close_connection = True
+        except Exception:
+            self._send_bridge_error()
 
     def do_GET(self):
-        self._handle_bridge_request()
+        self._safe_handle_bridge_request()
 
     def do_HEAD(self):
-        self._handle_bridge_request()
+        self._safe_handle_bridge_request()
 
     def do_POST(self):
-        self._handle_bridge_request()
+        self._safe_handle_bridge_request()
 
     def do_PUT(self):
-        self._handle_bridge_request()
+        self._safe_handle_bridge_request()
 
     def do_PATCH(self):
-        self._handle_bridge_request()
+        self._safe_handle_bridge_request()
 
     def do_DELETE(self):
-        self._handle_bridge_request()
+        self._safe_handle_bridge_request()
 
     def do_OPTIONS(self):
-        self._handle_bridge_request()
+        self._safe_handle_bridge_request()
 
     def log_message(self, format, *args):
         return
+
+    def _safe_handle_bridge_request(self):
+        try:
+            self._handle_bridge_request()
+        except SupervisorAuthError:
+            print("Supervisor API authorization failed", file=sys.stderr)
+            self._send_json(502, {"error": "supervisor_unavailable"})
+            return
+        except SupervisorError:
+            print("Supervisor API unavailable", file=sys.stderr)
+            self._send_json(502, {"error": "supervisor_unavailable"})
+            return
+        except Exception:
+            self._send_bridge_error()
+            return
 
     def _handle_bridge_request(self):
         if not self._authorized():
@@ -322,22 +339,15 @@ class BridgeRequestHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(405, {"error": "method_not_allowed"})
             return
 
-        try:
-            payload = self.server.app.health_payload()
-        except SupervisorAuthError:
-            print("Supervisor API authorization failed", file=sys.stderr)
-            self._send_json(502, {"error": "supervisor_unavailable"})
-            return
-        except SupervisorError:
-            print("Supervisor API unavailable", file=sys.stderr)
-            self._send_json(502, {"error": "supervisor_unavailable"})
-            return
-        except Exception:
-            print("Bridge handler failed", file=sys.stderr)
-            self._send_json(500, {"error": "bridge_error"})
-            return
-
+        payload = self.server.app.health_payload()
         self._send_json(200, payload)
+
+    def _send_bridge_error(self):
+        print("Bridge handler failed", file=sys.stderr)
+        try:
+            self._send_json(500, {"error": "bridge_error"})
+        except Exception:
+            self.close_connection = True
 
     def _authorized(self):
         expected = f"Bearer {self.server.app.options['token']}"

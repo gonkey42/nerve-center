@@ -628,6 +628,21 @@ class BridgeHealthPayloadTest(unittest.TestCase):
         self.assertEqual(json.loads(body), expected_payload)
         return body
 
+    def assert_bridge_error_response(self, request):
+        try:
+            urllib.request.urlopen(request, timeout=2)
+        except urllib.error.HTTPError as error:
+            self.assertEqual(error.code, 500)
+            body = error.read().decode("utf-8")
+            error.close()
+            self.assertEqual(json.loads(body), {"error": "bridge_error"})
+            self.assertEqual(body, '{"error":"bridge_error"}')
+            return body
+        except Exception as error:
+            self.fail(f"expected sanitized 500 bridge_error response, got {type(error).__name__}: {error}")
+
+        self.fail("expected sanitized 500 bridge_error response")
+
     def raw_nut_options(self, username="", password=SENSITIVE_VALUE):
         return {
             "mode": "netserver",
@@ -988,6 +1003,65 @@ class BridgeHealthPayloadTest(unittest.TestCase):
 
         output = stdout.getvalue() + stderr.getvalue()
         self.assertEqual(body, '{"error":"bridge_error"}')
+        self.assertIn("Bridge handler failed", output)
+        self.assert_failure_is_redacted(body, output)
+
+    def test_bridge_auth_path_failure_returns_generic_500_without_leaks(self):
+        original_authorized = run.BridgeRequestHandler._authorized
+
+        def exploding_authorized(handler):
+            raise RuntimeError(
+                f"Traceback fake {STRONG_TOKEN} raw-nut-password-should-not-leak "
+                "SUPERVISOR_TOKEN Authorization"
+            )
+
+        run.BridgeRequestHandler._authorized = exploding_authorized
+        self.addCleanup(setattr, run.BridgeRequestHandler, "_authorized", original_authorized)
+
+        app = run.BridgeApp(
+            options={"token": STRONG_TOKEN, "watched_addons": ["a0d7b954_nut"]},
+            supervisor=run.FakeSupervisorClient(
+                supervisor_info={"version": "2026.06.2", "healthy": True, "supported": True},
+                addons={"addons": []},
+                addon_info={},
+            ),
+        )
+        server, port = run.start_test_server(app)
+        self.addCleanup(server.shutdown)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        request = self.auth_request(port, "/health", authorization=f"Bearer {STRONG_TOKEN}")
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            body = self.assert_bridge_error_response(request)
+
+        output = stdout.getvalue() + stderr.getvalue()
+        self.assertIn("Bridge handler failed", output)
+        self.assert_failure_is_redacted(body, output)
+
+    def test_unserializable_success_payload_returns_generic_500_without_leaks(self):
+        class UnserializableApp:
+            options = {"token": STRONG_TOKEN, "watched_addons": ["a0d7b954_nut"]}
+
+            def health_payload(self):
+                return {
+                    "bad": object(),
+                    "token": STRONG_TOKEN,
+                    "password": "raw-nut-password-should-not-leak",
+                    "SUPERVISOR_TOKEN": SUPERVISOR_TOKEN_VALUE,
+                    "Authorization": f"Bearer {SUPERVISOR_TOKEN_VALUE}",
+                }
+
+        server, port = run.start_test_server(UnserializableApp())
+        self.addCleanup(server.shutdown)
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+
+        request = self.auth_request(port, "/health", authorization=f"Bearer {STRONG_TOKEN}")
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            body = self.assert_bridge_error_response(request)
+
+        output = stdout.getvalue() + stderr.getvalue()
         self.assertIn("Bridge handler failed", output)
         self.assert_failure_is_redacted(body, output)
 
