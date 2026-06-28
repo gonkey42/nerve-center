@@ -127,21 +127,6 @@ defmodule NerveCenter.Runtime.ManualControlTest do
     assert snapshot.data.summary.message == "Network UPS Tools add-on is error."
   end
 
-  test "refresh_source preserves semantic statuses emitted by real ha supervisor source" do
-    cases = [
-      {:ok, bridge_payload(addon_payload(%{}))},
-      {:degraded, bridge_payload(addon_payload(%{}), %{"supported" => false})},
-      {:error, bridge_payload(addon_payload(%{"state" => "error"}))}
-    ]
-
-    Enum.each(cases, fn {status, payload} ->
-      start_bridge_server({200, payload})
-
-      assert {:ok, snapshot} = ManualControl.refresh_source(:daisy, :ha_supervisor)
-      assert snapshot.status == status
-    end)
-  end
-
   test "refresh_source defaults missing status to ok" do
     with_fake_ha_supervisor_source({:ok, %{data: %{summary: %{message: "missing status"}}}}, fn ->
       assert {:ok, snapshot} = ManualControl.refresh_source(:daisy, :ha_supervisor)
@@ -165,14 +150,7 @@ defmodule NerveCenter.Runtime.ManualControlTest do
     allowed_statuses = [:ok, :degraded, :error, :offline, :stale, :unknown]
 
     Enum.each(allowed_statuses, fn status ->
-      with_fake_ha_supervisor_source(
-        {:ok, %{status: status, data: %{summary: %{message: Atom.to_string(status)}}}},
-        fn ->
-          assert {:ok, snapshot} = ManualControl.refresh_source(:daisy, :ha_supervisor)
-          assert snapshot.status == status
-          assert snapshot.data.summary.message == Atom.to_string(status)
-        end
-      )
+      assert_semantic_status(status)
     end)
   end
 
@@ -233,17 +211,35 @@ defmodule NerveCenter.Runtime.ManualControlTest do
   end
 
   test "refresh_source sanitizes raw auth and http tuples without raw bridge bodies" do
-    cases = [
+    real_bridge_cases = [
       {403, {:auth, 403, :manual_refresh_unauthorized}},
       {503, {:http, 503, :manual_refresh_http_error}}
     ]
 
-    Enum.each(cases, fn {status, expected_error} ->
+    Enum.each(real_bridge_cases, fn {status, expected_error} ->
       start_bridge_server({status, %{"error" => @forbidden_bridge_body}})
 
       log =
         capture_log(fn ->
           assert {:error, ^expected_error} = ManualControl.refresh_source(:daisy, :ha_supervisor)
+        end)
+
+      assert_sanitized_everywhere(log)
+    end)
+
+    raw_callback_cases = [
+      {{:error, {:auth, 403, @forbidden_bridge_body}},
+       {:auth, 403, :manual_refresh_unauthorized}},
+      {{:error, {:http, 503, @forbidden_bridge_body}}, {:http, 503, :manual_refresh_http_error}}
+    ]
+
+    Enum.each(raw_callback_cases, fn {callback_return, expected_error} ->
+      log =
+        capture_log(fn ->
+          with_fake_ha_supervisor_source(callback_return, fn ->
+            assert {:error, ^expected_error} =
+                     ManualControl.refresh_source(:daisy, :ha_supervisor)
+          end)
         end)
 
       assert_sanitized_everywhere(log)
@@ -263,6 +259,34 @@ defmodule NerveCenter.Runtime.ManualControlTest do
 
     assert count_ha_supervisor_events() == 0
   end
+
+  defp assert_semantic_status(status) when status in [:ok, :degraded, :error] do
+    status
+    |> bridge_payload_for_status()
+    |> then(&start_bridge_server({200, &1}))
+
+    assert {:ok, snapshot} = ManualControl.refresh_source(:daisy, :ha_supervisor)
+    assert snapshot.status == status
+  end
+
+  defp assert_semantic_status(status) when status in [:offline, :stale, :unknown] do
+    with_fake_ha_supervisor_source(
+      {:ok, %{status: status, data: %{summary: %{message: Atom.to_string(status)}}}},
+      fn ->
+        assert {:ok, snapshot} = ManualControl.refresh_source(:daisy, :ha_supervisor)
+        assert snapshot.status == status
+        assert snapshot.data.summary.message == Atom.to_string(status)
+      end
+    )
+  end
+
+  defp bridge_payload_for_status(:ok), do: bridge_payload(addon_payload(%{}))
+
+  defp bridge_payload_for_status(:degraded),
+    do: bridge_payload(addon_payload(%{}), %{"supported" => false})
+
+  defp bridge_payload_for_status(:error),
+    do: bridge_payload(addon_payload(%{"state" => "error"}))
 
   defp with_fake_ha_supervisor_source(callback_return, fun) do
     module = NerveCenter.Sources.Daisy.HASupervisorSource
