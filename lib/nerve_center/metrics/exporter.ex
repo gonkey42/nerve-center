@@ -92,5 +92,4 @@ defmodule NerveCenter.Metrics.Exporter do
     |> String.trim_trailing("0")
     |> String.trim_trailing(".")
   end
-
 end
