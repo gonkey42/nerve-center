@@ -58,6 +58,7 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
   @impl true
   def normalize(raw, context) do
     with {:ok, supervisor_raw} <- fetch_map(raw, :supervisor, :missing_supervisor),
+         :ok <- validate_supervisor(supervisor_raw),
          {:ok, addons_raw} <- fetch_list(raw, :addons, :missing_addons),
          {:ok, observed_at} <- parse_observed_at(value(raw, :observed_at)),
          {:ok, observed_addons} <- observed_addons(addons_raw) do
@@ -108,6 +109,14 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
        }}
     else
       {:error, reason} -> {:error, {:invalid_supervisor_bridge_payload, reason}}
+    end
+  end
+
+  defp validate_supervisor(supervisor) do
+    if is_boolean(value(supervisor, :healthy)) and is_boolean(value(supervisor, :supported)) do
+      :ok
+    else
+      {:error, :missing_supervisor}
     end
   end
 
@@ -418,6 +427,8 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
   defp new_problem_event(%{scope: :supervisor} = problem) do
     %{
       event_type: :ha_supervisor_unhealthy,
+      code: problem.code,
+      fingerprint: problem_fingerprint(problem),
       message: problem.message
     }
   end
@@ -425,13 +436,17 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
   defp new_problem_event(%{addon: addon} = problem) do
     %{
       event_type: :ha_supervisor_addon_problem,
+      code: problem.code,
+      fingerprint: problem_fingerprint(problem),
       message: "#{addon.label} problem: #{problem.code}."
     }
   end
 
-  defp recovery_event("supervisor:" <> _rest, _context) do
+  defp recovery_event("supervisor:" <> _rest = fingerprint, _context) do
     %{
       event_type: :ha_supervisor_recovered,
+      code: fingerprint_code(fingerprint),
+      fingerprint: fingerprint,
       message: "Home Assistant Supervisor problem recovered."
     }
   end
@@ -442,8 +457,25 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
 
     %{
       event_type: :ha_supervisor_addon_recovered,
+      code: fingerprint_code(fingerprint),
+      fingerprint: fingerprint,
       message: "#{label} problem recovered."
     }
+  end
+
+  defp fingerprint_code(fingerprint) do
+    fingerprint
+    |> String.split(":", parts: 3)
+    |> case do
+      [_scope_or_slug, code, _value] -> existing_code_atom(code)
+      _parts -> :unknown
+    end
+  end
+
+  defp existing_code_atom(code) do
+    String.to_existing_atom(code)
+  rescue
+    ArgumentError -> :unknown
   end
 
   defp addon_label(configured_addons, slug) do
@@ -517,10 +549,26 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSource do
   defp sanitize(value) when is_list(value), do: Enum.map(value, &sanitize/1)
 
   defp sanitize(value) when is_binary(value) do
-    Regex.replace(~r/Bearer\s+[A-Za-z0-9_-]{20,}/, value, "Bearer [REDACTED]")
+    value
+    |> redact_traceback()
+    |> redact_regex(~r/Authorization:\s*Bearer\s+[A-Za-z0-9_-]{20,}/i, "[REDACTED]")
+    |> redact_regex(~r/Bearer\s+[A-Za-z0-9_-]{20,}/, "Bearer [REDACTED]")
+    |> redact_regex(~r/Authorization/i, "[REDACTED]")
+    |> redact_regex(~r/[A-Za-z0-9_-]*token[A-Za-z0-9_-]*/i, "[REDACTED]")
+    |> redact_regex(~r/[A-Za-z0-9_-]*password[A-Za-z0-9_-]*/i, "[REDACTED]")
   end
 
   defp sanitize(value), do: value
+
+  defp redact_regex(value, regex, replacement), do: Regex.replace(regex, value, replacement)
+
+  defp redact_traceback(value) do
+    if String.contains?(value, "Traceback") do
+      "[REDACTED]"
+    else
+      value
+    end
+  end
 
   defp sensitive_key?(key) do
     normalized =

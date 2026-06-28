@@ -206,6 +206,24 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
              payload.data.supervisor.problems
   end
 
+  test "malformed payload rejects missing or non-boolean supervisor health fields" do
+    missing_healthy =
+      bridge_payload(%{
+        "supervisor" => Map.delete(bridge_payload()["supervisor"], "healthy")
+      })
+
+    non_boolean_supported =
+      bridge_payload(%{
+        "supervisor" => Map.put(bridge_payload()["supervisor"], "supported", "unknown")
+      })
+
+    assert {:error, {:invalid_supervisor_bridge_payload, :missing_supervisor}} =
+             @source.normalize(missing_healthy, context())
+
+    assert {:error, {:invalid_supervisor_bridge_payload, :missing_supervisor}} =
+             @source.normalize(non_boolean_supported, context())
+  end
+
   test "normalize maps required addon error to error" do
     payload = normalize!(bridge_payload(%{"addons" => [addon_payload(%{"state" => "error"})]}))
 
@@ -370,10 +388,71 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     assert addon(payload, "a0d7b954_nut").config_summary["password_set"] == true
   end
 
+  test "normalize sanitizes warning strings before data problems fingerprints events and logs" do
+    parent = self()
+
+    log =
+      capture_log(fn ->
+        assert {:ok, payload} =
+                 @source.normalize(
+                   bridge_payload(%{
+                     "addons" => [
+                       addon_payload(%{
+                         "config_warnings" => [
+                           %{
+                             "severity" => "critical",
+                             "code" =>
+                               "nut_leaked_#{@forbidden_password}_#{@forbidden_bridge_token}",
+                             "message" =>
+                               "Authorization: Bearer #{@forbidden_bridge_token} #{@forbidden_supervisor_token}",
+                             "trace" => "Traceback fake failure #{@forbidden_password}"
+                           },
+                           %{
+                             "severity" => "critical",
+                             "code" => "nut_username_blank",
+                             "message" => "NUT username is blank."
+                           }
+                         ]
+                       })
+                     ]
+                   }),
+                   context()
+                 )
+
+        send(parent, {:payload, payload})
+      end)
+
+    assert_receive {:payload, payload}
+    warning_rendered = inspect(addon(payload, "a0d7b954_nut").config_warnings)
+    event_rendered = inspect(payload.events)
+    private_rendered = inspect(payload.private)
+    rendered = inspect(payload)
+
+    for output <- [warning_rendered, event_rendered, private_rendered, rendered, log],
+        forbidden <- forbidden_fragments() do
+      refute output =~ forbidden
+    end
+
+    assert Enum.any?(addon(payload, "a0d7b954_nut").config_warnings, fn warning ->
+             warning["code"] == "nut_username_blank"
+           end)
+
+    assert Enum.any?(addon(payload, "a0d7b954_nut").problems, fn problem ->
+             problem.value == "nut_username_blank"
+           end)
+  end
+
   test "normalize emits events only on problem fingerprint changes" do
     first = normalize!(bridge_payload(%{"addons" => [addon_payload(%{"state" => "error"})]}))
 
-    assert Enum.map(first.events, & &1.event_type) == [:ha_supervisor_addon_problem]
+    assert first.events == [
+             %{
+               event_type: :ha_supervisor_addon_problem,
+               code: :required_addon_unhealthy,
+               fingerprint: "a0d7b954_nut:required_addon_unhealthy:error",
+               message: "Network UPS Tools problem: required_addon_unhealthy."
+             }
+           ]
 
     second =
       normalize!(
@@ -392,7 +471,15 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     problem = normalize!(bridge_payload(%{"addons" => [addon_payload(%{"state" => "error"})]}))
     recovered = normalize!(bridge_payload(), nil, problem.private)
 
-    assert Enum.map(recovered.events, & &1.event_type) == [:ha_supervisor_addon_recovered]
+    assert recovered.events == [
+             %{
+               event_type: :ha_supervisor_addon_recovered,
+               code: :required_addon_unhealthy,
+               fingerprint: "a0d7b954_nut:required_addon_unhealthy:error",
+               message: "Network UPS Tools problem recovered."
+             }
+           ]
+
     assert recovered.status == :ok
     assert recovered.private.ha_supervisor_problem_fingerprints == MapSet.new()
   end
@@ -405,7 +492,14 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
         })
       )
 
-    assert Enum.map(unhealthy.events, & &1.event_type) == [:ha_supervisor_unhealthy]
+    assert unhealthy.events == [
+             %{
+               event_type: :ha_supervisor_unhealthy,
+               code: :supervisor_unhealthy,
+               fingerprint: "supervisor:supervisor_unhealthy:false",
+               message: "Home Assistant Supervisor reports unhealthy."
+             }
+           ]
 
     unsupported =
       normalize!(
@@ -416,14 +510,32 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
         unhealthy.private
       )
 
-    assert Enum.map(unsupported.events, & &1.event_type) == [
-             :ha_supervisor_unhealthy,
-             :ha_supervisor_recovered
+    assert unsupported.events == [
+             %{
+               event_type: :ha_supervisor_unhealthy,
+               code: :supervisor_unsupported,
+               fingerprint: "supervisor:supervisor_unsupported:false",
+               message: "Home Assistant Supervisor reports unsupported."
+             },
+             %{
+               event_type: :ha_supervisor_recovered,
+               code: :supervisor_unhealthy,
+               fingerprint: "supervisor:supervisor_unhealthy:false",
+               message: "Home Assistant Supervisor problem recovered."
+             }
            ]
 
     recovered = normalize!(bridge_payload(), nil, unsupported.private)
 
-    assert Enum.map(recovered.events, & &1.event_type) == [:ha_supervisor_recovered]
+    assert recovered.events == [
+             %{
+               event_type: :ha_supervisor_recovered,
+               code: :supervisor_unsupported,
+               fingerprint: "supervisor:supervisor_unsupported:false",
+               message: "Home Assistant Supervisor problem recovered."
+             }
+           ]
+
     assert recovered.status == :ok
   end
 
@@ -553,6 +665,16 @@ defmodule NerveCenter.Sources.Daisy.HASupervisorSourceTest do
     |> addon(slug)
     |> Map.fetch!(:problems)
     |> Enum.any?(&(&1.code == code))
+  end
+
+  defp forbidden_fragments do
+    [
+      @forbidden_password,
+      @forbidden_bridge_token,
+      @forbidden_supervisor_token,
+      "Authorization",
+      "Traceback"
+    ]
   end
 
   defp listen_socket do
