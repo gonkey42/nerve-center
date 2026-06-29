@@ -6,7 +6,7 @@ arch:
   - amd64
 startup: system
 hassio_api: true
-hassio_role: default
+hassio_role: manager
 init: false
 host_network: false
 ports:

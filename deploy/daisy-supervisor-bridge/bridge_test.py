@@ -298,6 +298,37 @@ class BridgeStartupAndAuthTest(unittest.TestCase):
         with self.assertRaises(run.SupervisorError):
             run.SupervisorClient("supervisor-token", base_url=non_object_url).supervisor_info()
 
+    def test_supervisor_client_unwraps_supervisor_result_data_envelope(self):
+        body = json.dumps(
+            {
+                "result": "ok",
+                "data": {
+                    "version": "2026.06.2",
+                    "healthy": True,
+                    "supported": True,
+                },
+            }
+        ).encode("utf-8")
+        base_url = self.supervisor_response_server(body)
+
+        payload = run.SupervisorClient("supervisor-token", base_url=base_url).supervisor_info()
+
+        self.assertEqual(payload["version"], "2026.06.2")
+        self.assertTrue(payload["healthy"])
+        self.assertTrue(payload["supported"])
+
+    def test_supervisor_client_rejects_supervisor_error_envelope(self):
+        body = json.dumps(
+            {
+                "result": "error",
+                "message": "Authorization raw-nut-password-should-not-leak",
+            }
+        ).encode("utf-8")
+        base_url = self.supervisor_response_server(body)
+
+        with self.assertRaises(run.SupervisorError):
+            run.SupervisorClient("supervisor-token", base_url=base_url).supervisor_info()
+
     def test_build_health_payload_rejects_unexpected_supervisor_shapes(self):
         with self.assertRaises(run.SupervisorError):
             run.build_health_payload(

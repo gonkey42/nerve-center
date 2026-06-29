@@ -8,4 +8,4 @@ COPY run.py /app/run.py
 
 EXPOSE 9567
 
-CMD ["python3", "/app/run.py"]
+CMD ["/command/with-contenv", "python3", "/app/run.py"]

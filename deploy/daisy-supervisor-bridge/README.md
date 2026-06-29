@@ -21,8 +21,7 @@ openssl rand -hex 32
 1. Copy this directory into Daisy's Home Assistant local add-ons directory.
 2. Reload the add-on store and install `Daisy Supervisor Bridge`.
 3. Configure a random `token` and the required `watched_addons`.
-4. Confirm the add-on installs, starts, binds `9567/tcp`, and runs with direct `CMD` plus `init: false`.
-5. If the Home Assistant add-on validator rejects direct `CMD` or `init: false`, convert the add-on to an S6 service layout before proceeding.
+4. Confirm the add-on installs, starts, binds `9567/tcp`, and runs the bridge command through `/command/with-contenv` so the Supervisor token is visible to `run.py`.
 
 ## Required Options
 
@@ -36,7 +35,7 @@ a0d7b954_nut
 
 ## Role Verification
 
-`hassio_role: default` is the initial target, not an immutable requirement. Verify the role on Daisy against all three Supervisor endpoints before relying on the bridge:
+`hassio_role: manager` is required on Daisy because `default` cannot read the add-on overview endpoint. Verify the role on Daisy against all three Supervisor endpoints before relying on the bridge:
 
 ```text
 /addons
@@ -47,10 +46,10 @@ a0d7b954_nut
 Role gate:
 
 ```text
-Endpoint                         Observed status  Selected role
-/addons                          pending          default
-/addons/a0d7b954_nut/info         pending          default
-/supervisor/info                  pending          default
+Endpoint                         Observed status             Selected role
+/addons                          403 default, 200 manager    manager
+/addons/a0d7b954_nut/info         200 default, 200 manager    manager
+/supervisor/info                  200 default, 200 manager    manager
 ```
 
 If any endpoint fails, raise only to the least Home Assistant Supervisor role that works, update `config.yaml`, and record the endpoint, observed status code, and selected role here and in the PR body.
@@ -98,13 +97,13 @@ Before marking deployment ready:
 - [ ] Bridge add-on config contains `ports: {"9567/tcp": 9567}` and `host_network: false`.
 - [ ] Daisy's actual Home Assistant add-on architecture has replaced the `pending` value in the Architecture gate above before this item is checked; if Daisy reports an architecture other than `amd64`, this commit updates both `arch` and `BUILD_FROM` and records the observed architecture.
 - [ ] The local add-on installs and starts successfully on Daisy with the committed manifest/Dockerfile.
-- [ ] If Daisy's add-on validator rejects direct `CMD` or `init: false`, the add-on has been converted to the supported S6 service layout before continuing.
+- [ ] Bridge command is wrapped with `/command/with-contenv` so injected Supervisor environment variables are visible at runtime.
 - [ ] Bridge refuses to start with a blank token.
 - [ ] Bridge starts with a random 64 hex character token from `openssl rand -hex 32`.
 - [ ] `GET /health` with a valid token returns `a0d7b954_nut`.
 - [ ] `GET /health` with an invalid token returns `401` and `{"error":"unauthorized"}`.
 - [ ] Response JSON does not contain raw `options.users[].password`.
-- [ ] `hassio_role: default` can read `/addons`, `/addons/a0d7b954_nut/info`, and `/supervisor/info`; if a broader role is committed, this README records the exact observed status code and selected role.
+- [ ] `hassio_role: manager` can read `/addons`, `/addons/a0d7b954_nut/info`, and `/supervisor/info`; `default` returned `403` for `/addons` on Daisy.
 - [ ] HAL9000 can reach `http://100.103.249.3:9567/health` over the trusted Tailnet path.
 - [ ] Bridge reachability is limited to the HAL9000/NerveCenter trusted Tailnet or trusted network path where HA OS/firewall controls allow it.
 - [ ] If HA OS/firewall controls cannot restrict exposure further in this environment, this README records that limitation and the compensating controls: random bridge token, read-only `GET /health`, no mutating endpoints, no add-on logs, and sanitized responses.
