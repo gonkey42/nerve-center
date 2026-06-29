@@ -96,7 +96,7 @@ class SupervisorClient:
         )
         try:
             with urllib.request.urlopen(request, timeout=5) as response:
-                return json.loads(response.read().decode("utf-8"))
+                return unwrap_supervisor_response(json.loads(response.read().decode("utf-8")))
         except urllib.error.HTTPError as error:
             error.close()
             if error.code in (401, 403):
@@ -497,6 +497,15 @@ def _contains_control_character(value):
 def _require_object(payload):
     if not isinstance(payload, dict):
         raise SupervisorMalformedError("Supervisor response malformed")
+    return payload
+
+
+def unwrap_supervisor_response(payload):
+    payload = _require_object(payload)
+    if payload.get("result") == "ok" and "data" in payload:
+        return _require_object(payload["data"])
+    if payload.get("result") == "error":
+        raise SupervisorError("Supervisor API request failed")
     return payload
 
 
