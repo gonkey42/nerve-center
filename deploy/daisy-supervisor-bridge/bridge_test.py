@@ -748,6 +748,18 @@ class BridgeHealthPayloadTest(unittest.TestCase):
             ],
         }
 
+    def raw_nut_netclient_options(self):
+        return {
+            "mode": "netclient",
+            "shutdown_host": True,
+            "devices": [],
+            "users": [],
+            "remote_ups_name": "cyberpower",
+            "remote_ups_host": "100.97.130.40",
+            "remote_ups_user": "daisy",
+            "remote_ups_password": SENSITIVE_VALUE,
+        }
+
     def nut_detail(self, options=None, network=None, **overrides):
         detail = {
             "slug": "a0d7b954_nut",
@@ -1160,6 +1172,41 @@ class BridgeHealthPayloadTest(unittest.TestCase):
         encoded = self.assert_redacted_payload(payload)
         self.assertIn('"username_set"', encoded)
         self.assertIn('"password_set"', encoded)
+
+    def test_nut_netclient_options_use_remote_credential_summary_without_local_user_warnings(self):
+        payload = run.build_health_payload(
+            self.supervisor(
+                details={
+                    "a0d7b954_nut": self.nut_detail(
+                        options=self.raw_nut_netclient_options(),
+                        network={"3493/tcp": None},
+                    )
+                }
+            ),
+            ["a0d7b954_nut"],
+        )
+        addon = payload["addons"][0]
+
+        self.assertEqual(
+            addon["config_summary"],
+            {
+                "mode": "netclient",
+                "shutdown_host": True,
+                "device_count": 0,
+                "users": [],
+                "remote_ups_name_set": True,
+                "remote_ups_host_set": True,
+                "remote_ups_user_set": True,
+                "remote_ups_password_set": True,
+            },
+        )
+        self.assertEqual(addon["config_warnings"], [])
+        encoded = self.assert_redacted_payload(payload)
+        self.assertIn('"remote_ups_password_set"', encoded)
+        self.assertNotIn(SENSITIVE_VALUE, encoded)
+        self.assertNotIn("nut_username_blank", encoded)
+        self.assertNotIn("nut_password_blank", encoded)
+        self.assertNotIn("nut_port_unmapped", encoded)
 
     def test_malformed_allowlisted_scalar_objects_return_sanitized_502(self):
         nested_secret = {

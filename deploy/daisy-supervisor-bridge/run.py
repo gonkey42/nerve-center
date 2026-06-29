@@ -276,6 +276,7 @@ def sanitize_nut_config(options, network):
     if not isinstance(options, dict):
         options = {}
 
+    mode = _string_or_none(options.get("mode"))
     users = []
     warnings = []
     username_blank = False
@@ -301,26 +302,37 @@ def sanitize_nut_config(options, network):
             }
         )
 
-    if not users:
+    if not users and mode != "netclient":
         username_blank = True
         password_blank = True
 
-    if username_blank:
+    if mode != "netclient" and username_blank:
         warnings.append(problem("nut_username_blank", "critical", "NUT user username is blank."))
-    if password_blank:
+    if mode != "netclient" and password_blank:
         warnings.append(problem("nut_password_blank", "critical", "NUT user password is blank."))
 
-    mode = _string_or_none(options.get("mode"))
     if mode == "netserver" and not _network_port_mapped(network, "3493"):
         warnings.append(problem("nut_port_unmapped", "warning", "NUT netserver port 3493 is not mapped."))
 
+    config_summary = {
+        "mode": mode,
+        "shutdown_host": _bool_or_none(options.get("shutdown_host")),
+        "device_count": _device_count(options.get("devices")),
+        "users": users,
+    }
+
+    if mode == "netclient":
+        config_summary.update(
+            {
+                "remote_ups_name_set": _non_empty_string(options.get("remote_ups_name")),
+                "remote_ups_host_set": _non_empty_string(options.get("remote_ups_host")),
+                "remote_ups_user_set": _non_empty_string(options.get("remote_ups_user")),
+                "remote_ups_password_set": _non_empty_string(options.get("remote_ups_password")),
+            }
+        )
+
     return (
-        {
-            "mode": mode,
-            "shutdown_host": _bool_or_none(options.get("shutdown_host")),
-            "device_count": _device_count(options.get("devices")),
-            "users": users,
-        },
+        config_summary,
         warnings,
     )
 
