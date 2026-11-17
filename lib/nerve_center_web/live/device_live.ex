@@ -4,6 +4,7 @@ defmodule NerveCenterWeb.DeviceLive do
   alias NerveCenter.Messages.AppHealthUpdated
   alias NerveCenter.Messages.DeviceSnapshotUpdated
   alias NerveCenter.Metrics.Catalog
+  alias NerveCenter.Metrics.History
   alias NerveCenter.Runtime.AppHealth
   alias NerveCenter.Runtime.SnapshotStore
   alias NerveCenter.Topology
@@ -23,13 +24,20 @@ defmodule NerveCenterWeb.DeviceLive do
        page_title: "#{device.label} Device",
        device: device,
        snapshot: SnapshotStore.snapshot(device.id),
-       health: AppHealth.snapshot()
+       health: AppHealth.snapshot(),
+       histories: load_histories(device.id),
+       energy_totals: load_energy_totals(device.id, SnapshotStore.snapshot(device.id))
      )}
   end
 
   @impl true
   def handle_info(%DeviceSnapshotUpdated{snapshot: snapshot}, socket) do
-    {:noreply, assign(socket, :snapshot, snapshot)}
+    {:noreply,
+     assign(socket,
+       snapshot: snapshot,
+       histories: load_histories(socket.assigns.device.id),
+       energy_totals: load_energy_totals(socket.assigns.device.id, snapshot)
+     )}
   end
 
   def handle_info(%AppHealthUpdated{health: health}, socket) do
@@ -62,6 +70,13 @@ defmodule NerveCenterWeb.DeviceLive do
             >
               Sources
             </.link>
+            <.link
+              :if={@device.id == :daisy}
+              navigate={~p"/devices/#{Atom.to_string(@device.id)}/home-assistant"}
+              class="rounded-full border border-amber-400/50 px-4 py-2 text-amber-100 transition hover:bg-amber-400/10"
+            >
+              HA Dashboard
+            </.link>
           </nav>
         </div>
       </header>
@@ -80,6 +95,132 @@ defmodule NerveCenterWeb.DeviceLive do
         <.panel title="Updated At">
           <.utc_time value={@snapshot.updated_at} class="text-lg font-semibold text-stone-50" />
         </.panel>
+      </section>
+
+      <section
+        :if={@device.id == :ups}
+        class="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]"
+      >
+        <article class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80">
+          <div class="border-b border-stone-800 px-6 py-4">
+            <h2 class="text-lg font-semibold text-stone-50">UPS Overview</h2>
+          </div>
+          <div class="grid gap-5 px-6 py-5 md:grid-cols-2">
+            <.gauge
+              label="Battery"
+              value={@snapshot.metrics[:ups_battery_charge_ratio]}
+              display={Display.percent(@snapshot.metrics[:ups_battery_charge_ratio])}
+              tone="emerald"
+            />
+            <.gauge
+              label="Load"
+              value={@snapshot.metrics[:ups_load_ratio]}
+              display={Display.percent(@snapshot.metrics[:ups_load_ratio])}
+              tone="amber"
+            />
+            <.summary_tile
+              label="Runtime"
+              value={Display.duration(@snapshot.metrics[:ups_battery_runtime_seconds])}
+              hint={battery_status(@snapshot)}
+            />
+            <.summary_tile
+              label="Current Load"
+              value={Display.watts(@snapshot.metrics[:ups_current_load_watts])}
+              hint="Watts currently under UPS load"
+            />
+          </div>
+        </article>
+
+        <article class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80">
+          <div class="border-b border-stone-800 px-6 py-4">
+            <h2 class="text-lg font-semibold text-stone-50">Hardware</h2>
+          </div>
+          <div class="grid gap-4 px-6 py-5 sm:grid-cols-2">
+            <.kv label="Model" value={ups_data(@snapshot, :model) || "-"} />
+            <.kv label="Manufacturer" value={ups_data(@snapshot, :manufacturer) || "-"} />
+            <.kv
+              label="Input Voltage"
+              value={Display.volts(@snapshot.metrics[:ups_input_voltage_volts])}
+            />
+            <.kv
+              label="Output Voltage"
+              value={Display.volts(ups_data(@snapshot, :output_voltage_volts))}
+            />
+            <.kv
+              label="Battery Voltage"
+              value={Display.volts(ups_data(@snapshot, :battery_voltage_volts))}
+            />
+            <.kv label="Last Test" value={ups_data(@snapshot, :test_result) || "-"} />
+            <.kv label="Driver" value={driver_label(@snapshot)} />
+            <.kv label="NUT Status" value={ups_data(@snapshot, :status) || "-"} />
+          </div>
+        </article>
+
+        <article class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80 xl:col-span-2">
+          <div class="border-b border-stone-800 px-6 py-4">
+            <h2 class="text-lg font-semibold text-stone-50">Energy Use</h2>
+          </div>
+          <div class="grid gap-4 px-6 py-5 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+            <.summary_tile
+              label="Current Watts"
+              value={Display.watts(@snapshot.metrics[:ups_current_load_watts])}
+              hint="Live attached load"
+            />
+            <.summary_tile
+              label="Last Hour"
+              value={Display.kwh(@energy_totals[:hour])}
+              hint="Rolling total"
+            />
+            <.summary_tile
+              label="Last Day"
+              value={Display.kwh(@energy_totals[:day])}
+              hint="Rolling total"
+            />
+            <.summary_tile
+              label="Last Week"
+              value={Display.kwh(@energy_totals[:week])}
+              hint="Rolling total"
+            />
+            <.summary_tile
+              label="Last Month"
+              value={Display.kwh(@energy_totals[:month])}
+              hint="Rolling 30 days"
+            />
+            <.summary_tile
+              label="Last Year"
+              value={Display.kwh(@energy_totals[:year])}
+              hint="Rolling 365 days"
+            />
+          </div>
+        </article>
+
+        <article class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80 xl:col-span-2">
+          <div class="border-b border-stone-800 px-6 py-4">
+            <h2 class="text-lg font-semibold text-stone-50">UPS Trends</h2>
+          </div>
+          <div class="grid gap-4 px-6 py-5 md:grid-cols-2 xl:grid-cols-4">
+            <.trend_card
+              label="Runtime"
+              value={Display.duration(@snapshot.metrics[:ups_battery_runtime_seconds])}
+              points={history(@histories, :ups_battery_runtime_seconds)}
+            />
+            <.trend_card
+              label="Load"
+              value={Display.percent(@snapshot.metrics[:ups_load_ratio])}
+              points={history(@histories, :ups_load_ratio)}
+            />
+            <.trend_card
+              label="Watts"
+              value={Display.watts(@snapshot.metrics[:ups_current_load_watts])}
+              points={history(@histories, :ups_current_load_watts)}
+            />
+            <.trend_card
+              label="Input Voltage"
+              value={Display.volts(@snapshot.metrics[:ups_input_voltage_volts])}
+              points={history(@histories, :ups_input_voltage_volts)}
+            />
+          </div>
+        </article>
       </section>
 
       <section class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80">
@@ -240,6 +381,82 @@ defmodule NerveCenterWeb.DeviceLive do
     """
   end
 
+  attr :label, :string, required: true
+  attr :value, :float, default: nil
+  attr :display, :string, required: true
+  attr :tone, :string, default: "amber"
+
+  defp gauge(assigns) do
+    assigns =
+      assigns
+      |> assign(:percent, gauge_percent(assigns.value))
+      |> assign(:style, gauge_style(assigns.value, assigns.tone))
+
+    ~H"""
+    <div class="rounded-2xl border border-stone-800 bg-stone-950/70 p-5">
+      <div class="mx-auto grid h-36 w-36 place-items-center rounded-full" style={@style}>
+        <div class="grid h-24 w-24 place-items-center rounded-full bg-stone-950 text-center">
+          <div>
+            <p class="text-xs uppercase tracking-[0.18em] text-stone-500">{@label}</p>
+            <p class="mt-1 text-xl font-semibold text-stone-50">{@display}</p>
+          </div>
+        </div>
+      </div>
+      <div class="mt-5 h-2 overflow-hidden rounded-full bg-stone-800">
+        <div class="h-full rounded-full bg-amber-300" style={"width: #{@percent}%"} />
+      </div>
+    </div>
+    """
+  end
+
+  attr :label, :string, required: true
+  attr :value, :string, required: true
+  attr :hint, :string, default: nil
+
+  defp summary_tile(assigns) do
+    ~H"""
+    <div class="rounded-2xl border border-stone-800 bg-stone-950/70 p-5">
+      <p class="text-xs uppercase tracking-[0.22em] text-stone-400">{@label}</p>
+      <p class="mt-3 text-3xl font-semibold text-stone-50">{@value}</p>
+      <p :if={@hint} class="mt-3 text-sm text-stone-400">{@hint}</p>
+    </div>
+    """
+  end
+
+  attr :label, :string, required: true
+  attr :value, :string, required: true
+  attr :points, :list, default: []
+
+  defp trend_card(assigns) do
+    assigns = assign(assigns, :polyline, sparkline_points(assigns.points))
+
+    ~H"""
+    <div class="rounded-2xl border border-stone-800 bg-stone-950/70 p-4">
+      <div class="flex items-start justify-between gap-3">
+        <p class="text-xs uppercase tracking-[0.22em] text-stone-400">{@label}</p>
+        <p class="text-sm font-semibold text-stone-50">{@value}</p>
+      </div>
+      <svg
+        viewBox="0 0 120 48"
+        class="mt-4 h-16 w-full overflow-visible"
+        role="img"
+        aria-label={"#{@label} trend"}
+      >
+        <polyline
+          :if={@polyline != ""}
+          points={@polyline}
+          fill="none"
+          stroke="rgb(252 211 77)"
+          stroke-width="3"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+        <line x1="0" y1="44" x2="120" y2="44" stroke="rgb(68 64 60)" stroke-width="1" />
+      </svg>
+    </div>
+    """
+  end
+
   attr :source, :map, required: true
   attr :data, :map, required: true
 
@@ -299,6 +516,89 @@ defmodule NerveCenterWeb.DeviceLive do
 
   defp entity_state(%{state: state, unit_of_measurement: nil}), do: state
   defp entity_state(%{state: state, unit_of_measurement: unit}), do: "#{state} #{unit}"
+
+  defp load_histories(:ups) do
+    [
+      :ups_battery_runtime_seconds,
+      :ups_load_ratio,
+      :ups_current_load_watts,
+      :ups_input_voltage_volts
+    ]
+    |> Map.new(&{&1, History.recent_points(:ups, &1, 48)})
+  rescue
+    _error -> %{}
+  end
+
+  defp load_histories(_device_id), do: %{}
+
+  defp load_energy_totals(:ups, snapshot) do
+    History.energy_totals(
+      :ups,
+      :ups_current_load_watts,
+      snapshot.metrics[:ups_current_load_watts]
+    )
+  rescue
+    _error -> %{}
+  end
+
+  defp load_energy_totals(_device_id, _snapshot), do: %{}
+
+  defp history(histories, metric_id), do: Map.get(histories, metric_id, [])
+
+  defp ups_data(snapshot, key), do: get_in(snapshot.sources, [:nut, Access.key(:data), key])
+
+  defp driver_label(snapshot) do
+    [ups_data(snapshot, :driver_name), ups_data(snapshot, :driver_version)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" ")
+    |> case do
+      "" -> "-"
+      value -> value
+    end
+  end
+
+  defp battery_status(snapshot) do
+    cond do
+      snapshot.metrics[:ups_low_battery_flag] == 1 -> "Low battery"
+      snapshot.metrics[:ups_on_battery_flag] == 1 -> "On battery"
+      true -> "Online"
+    end
+  end
+
+  defp gauge_percent(nil), do: 0
+  defp gauge_percent(value), do: value |> max(0.0) |> min(1.0) |> Kernel.*(100) |> Float.round(1)
+
+  defp gauge_style(nil, _tone),
+    do: "background: conic-gradient(rgb(68 64 60) 0deg, rgb(68 64 60) 360deg);"
+
+  defp gauge_style(value, tone) do
+    degrees = value |> max(0.0) |> min(1.0) |> Kernel.*(360) |> Float.round(1)
+    color = gauge_color(tone)
+
+    "background: conic-gradient(#{color} 0deg, #{color} #{degrees}deg, rgb(68 64 60) #{degrees}deg, rgb(68 64 60) 360deg);"
+  end
+
+  defp gauge_color("emerald"), do: "rgb(52 211 153)"
+  defp gauge_color(_tone), do: "rgb(252 211 77)"
+
+  defp sparkline_points([]), do: ""
+  defp sparkline_points([_single]), do: ""
+
+  defp sparkline_points(points) do
+    values = Enum.map(points, & &1.value)
+    min_value = Enum.min(values)
+    max_value = Enum.max(values)
+    span = max(max_value - min_value, 1.0)
+    last_index = max(length(values) - 1, 1)
+
+    values
+    |> Enum.with_index()
+    |> Enum.map_join(" ", fn {value, index} ->
+      x = Float.round(index / last_index * 120, 2)
+      y = Float.round(42 - (value - min_value) / span * 36, 2)
+      "#{x},#{y}"
+    end)
+  end
 
   defp humanize_metric(metric_id) do
     metric_id

@@ -44,6 +44,12 @@ defmodule NerveCenter.Sources.HAL9000.LaunchdSource do
      }}
   end
 
+  def control_service(device, label, action) when action in [:start, :stop, :restart] do
+    with :ok <- ensure_configured_label(device, label) do
+      run_launchctl(label, action)
+    end
+  end
+
   defp service_label(%{label: label}), do: label
   defp service_label(label), do: label
 
@@ -71,5 +77,38 @@ defmodule NerveCenter.Sources.HAL9000.LaunchdSource do
       pid: pid,
       last_exit_status: last_exit_status
     }
+  end
+
+  defp ensure_configured_label(device, label) do
+    if label in Enum.map(device.launchd_labels, &service_label/1) do
+      :ok
+    else
+      {:error, {:unknown_launchd_label, label}}
+    end
+  end
+
+  defp run_launchctl(label, action) do
+    args =
+      case action do
+        :start -> ["kickstart", service_target(label)]
+        :stop -> ["bootout", service_target(label)]
+        :restart -> ["kickstart", "-k", service_target(label)]
+      end
+
+    case System.cmd("launchctl", args, stderr_to_stdout: true) do
+      {_output, 0} -> :ok
+      {output, status} -> {:error, {:launchctl, status, String.trim(output)}}
+    end
+  rescue
+    error -> {:error, {:launchctl, Exception.message(error)}}
+  end
+
+  defp service_target(label), do: "gui/#{System.get_env("UID") || uid()}/#{label}"
+
+  defp uid do
+    {output, 0} = System.cmd("id", ["-u"], stderr_to_stdout: true)
+    String.trim(output)
+  rescue
+    _error -> "501"
   end
 end

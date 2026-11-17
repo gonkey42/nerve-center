@@ -66,6 +66,10 @@ defmodule NerveCenterWeb.Display do
   def watts(nil), do: "-"
   def watts(value) when is_number(value), do: "#{Float.round(value / 1, 1)} W"
 
+  def kwh(nil), do: "-"
+  def kwh(value) when is_number(value) and value < 1, do: "#{Float.round(value * 1_000, 1)} Wh"
+  def kwh(value) when is_number(value), do: "#{Float.round(value, 2)} kWh"
+
   def count(nil), do: "-"
   def count(value) when is_integer(value), do: Integer.to_string(value)
   def count(value) when is_float(value), do: Integer.to_string(round(value))

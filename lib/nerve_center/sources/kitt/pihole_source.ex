@@ -85,6 +85,22 @@ defmodule NerveCenter.Sources.Kitt.PiHoleSource do
      }}
   end
 
+  def set_blocking(device, enabled, timer_seconds \\ nil) when is_boolean(enabled) do
+    context = %{device: device}
+
+    with {:ok, session} <- authenticate(context) do
+      payload =
+        %{blocking: enabled}
+        |> maybe_put_timer(enabled, timer_seconds)
+
+      Support.request_json("#{api_base_url(context)}/dns/blocking",
+        method: :post,
+        headers: [{"x-ftl-sid", session.sid}],
+        json: payload
+      )
+    end
+  end
+
   defp existing_session(context) do
     case context.private do
       %{session: %{sid: sid, validity: validity}} when is_binary(sid) ->
@@ -145,4 +161,13 @@ defmodule NerveCenter.Sources.Kitt.PiHoleSource do
   end
 
   defp api_base_url(context), do: "#{context.device.pihole_base_url}/api"
+
+  defp maybe_put_timer(payload, true, _timer_seconds), do: payload
+
+  defp maybe_put_timer(payload, false, timer_seconds)
+       when is_integer(timer_seconds) and timer_seconds > 0 do
+    Map.put(payload, :timer, timer_seconds)
+  end
+
+  defp maybe_put_timer(payload, false, _timer_seconds), do: payload
 end
