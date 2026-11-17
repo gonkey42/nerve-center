@@ -85,6 +85,27 @@ config :nerve_center, :devices, [
     ]
   },
   %{
+    id: :mac_ups,
+    label: "MAC UPS",
+    hostname: "hal9000",
+    ip: "127.0.0.1",
+    display_order: 7,
+    enabled: true,
+    offline_expected: false,
+    hub_module: NerveCenter.Devices.UpsHub,
+    nut_host: "127.0.0.1",
+    nut_port: 3493,
+    nut_device: "macups",
+    sources: [
+      %{
+        name: :nut,
+        module: NerveCenter.Sources.Ups.NUTSource,
+        enabled: true,
+        interval_ms: 30_000
+      }
+    ]
+  },
+  %{
     id: :rosie,
     label: "ROSIE",
     hostname: "rosie",
@@ -198,7 +219,7 @@ config :nerve_center, :devices, [
     label: "Zoidberg",
     hostname: "zoidberg",
     ip: "100.126.22.36",
-    display_order: 7,
+    display_order: 8,
     enabled: true,
     offline_expected: true,
     hub_module: NerveCenter.Devices.ZoidbergHub,

@@ -40,6 +40,15 @@ defmodule NerveCenterWeb.DetailLiveTest do
 
     assert html =~ "UPS"
     assert html =~ "Current Metrics"
+    assert html =~ "UPS Overview"
+    assert html =~ "UPS Trends"
+    assert html =~ "Energy Use"
+    assert html =~ "Current Watts"
+    assert html =~ "Last Hour"
+    assert html =~ "Last Month"
+    assert html =~ "Last Year"
+    assert html =~ "Input Voltage"
+    assert html =~ "Hardware"
   end
 
   test "device detail renders for rosie", %{conn: conn} do
@@ -54,6 +63,14 @@ defmodule NerveCenterWeb.DetailLiveTest do
 
     assert html =~ "DAISY"
     assert html =~ "Current Metrics"
+    assert html =~ "HA Dashboard"
+  end
+
+  test "home assistant dashboard renders for daisy", %{conn: conn} do
+    {:ok, _view, html} = live(conn, ~p"/devices/daisy/home-assistant")
+
+    assert html =~ "DAISY Dashboard"
+    assert html =~ "Add Card"
   end
 
   test "device detail renders for stig", %{conn: conn} do

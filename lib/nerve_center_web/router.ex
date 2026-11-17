@@ -19,6 +19,7 @@ defmodule NerveCenterWeb.Router do
 
     live "/", DashboardLive, :index
     live "/devices/:id", DeviceLive, :show
+    live "/devices/:id/home-assistant", HADashboardLive, :show
     live "/sources", SourcesLive, :index
     live "/sources/:device_id/:source", SourceLive, :show
   end

@@ -99,6 +99,32 @@ defmodule NerveCenter.Sources.Ups.NUTSourceTest do
     assert payload.data.status == "OL"
   end
 
+  test "normalize accepts macosx-ups readings without load or input voltage" do
+    assert {:ok, payload} =
+             NUTSource.normalize(
+               %{
+                 "battery.charge" => "100",
+                 "battery.runtime" => "7380",
+                 "battery.voltage" => "27.400",
+                 "device.model" => "CST150UC2",
+                 "driver.name" => "macosx-ups",
+                 "ups.status" => "OB DISCHRG"
+               },
+               %{}
+             )
+
+    metrics = Map.new(payload.metrics, &{&1.metric, &1.value})
+
+    assert metrics.ups_battery_charge_ratio == 1.0
+    assert metrics.ups_battery_runtime_seconds == 7380
+    assert metrics.ups_on_battery_flag == 1
+    refute Map.has_key?(metrics, :ups_load_ratio)
+    refute Map.has_key?(metrics, :ups_input_voltage_volts)
+    refute Map.has_key?(metrics, :ups_current_load_watts)
+    assert payload.data.load_percent == nil
+    assert payload.data.model == "CST150UC2"
+  end
+
   test "poll classifies ACCESS-DENIED as an auth failure" do
     {:ok, listener} =
       :gen_tcp.listen(0, [

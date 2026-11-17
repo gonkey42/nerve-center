@@ -47,6 +47,25 @@ defmodule NerveCenter.Runtime.ManualControl do
     kind, reason -> {:error, sanitize_refresh_error({:caught, kind, reason})}
   end
 
+  def control_launchd(label, action) do
+    device = Topology.get_device!(:hal9000)
+
+    with :ok <- NerveCenter.Sources.HAL9000.LaunchdSource.control_service(device, label, action),
+         {:ok, _snapshot} <- refresh_source(:hal9000, :launchd) do
+      :ok
+    end
+  end
+
+  def set_pihole_blocking(enabled, timer_seconds \\ nil) do
+    device = Topology.get_device!(:kitt)
+
+    with {:ok, _response} <-
+           NerveCenter.Sources.Kitt.PiHoleSource.set_blocking(device, enabled, timer_seconds),
+         {:ok, _snapshot} <- refresh_source(:kitt, :pihole) do
+      :ok
+    end
+  end
+
   defp publish_success(device, source, payload, semantic_status, probe_data) do
     observed_at = observed_at(payload)
     normalized_metrics = Catalog.normalize(Map.get(payload, :metrics, []) || [])
