@@ -98,7 +98,7 @@ defmodule NerveCenterWeb.DeviceLive do
       </section>
 
       <section
-        :if={@device.id == :ups}
+        :if={ups_device?(@device)}
         class="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]"
       >
         <article class="overflow-hidden rounded-3xl border border-stone-800 bg-stone-900/80">
@@ -517,31 +517,43 @@ defmodule NerveCenterWeb.DeviceLive do
   defp entity_state(%{state: state, unit_of_measurement: nil}), do: state
   defp entity_state(%{state: state, unit_of_measurement: unit}), do: "#{state} #{unit}"
 
-  defp load_histories(:ups) do
+  defp ups_device?(device), do: Map.get(device, :nut_device) != nil
+
+  defp ups_device_id?(device_id) do
+    device_id |> Topology.get_device!() |> ups_device?()
+  rescue
+    _error -> false
+  end
+
+  defp load_histories(device_id) do
+    if ups_device_id?(device_id), do: load_ups_histories(device_id), else: %{}
+  end
+
+  defp load_ups_histories(device_id) do
     [
       :ups_battery_runtime_seconds,
       :ups_load_ratio,
       :ups_current_load_watts,
       :ups_input_voltage_volts
     ]
-    |> Map.new(&{&1, History.recent_points(:ups, &1, 48)})
+    |> Map.new(&{&1, History.recent_points(device_id, &1, 48)})
   rescue
     _error -> %{}
   end
 
-  defp load_histories(_device_id), do: %{}
-
-  defp load_energy_totals(:ups, snapshot) do
-    History.energy_totals(
-      :ups,
-      :ups_current_load_watts,
-      snapshot.metrics[:ups_current_load_watts]
-    )
+  defp load_energy_totals(device_id, snapshot) do
+    if ups_device_id?(device_id) do
+      History.energy_totals(
+        device_id,
+        :ups_current_load_watts,
+        snapshot.metrics[:ups_current_load_watts]
+      )
+    else
+      %{}
+    end
   rescue
     _error -> %{}
   end
-
-  defp load_energy_totals(_device_id, _snapshot), do: %{}
 
   defp history(histories, metric_id), do: Map.get(histories, metric_id, [])
 

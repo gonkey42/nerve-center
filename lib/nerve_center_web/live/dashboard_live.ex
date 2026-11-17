@@ -152,7 +152,7 @@ defmodule NerveCenterWeb.DashboardLive do
           </div>
 
           <div class="flex flex-col gap-5 px-6 py-5">
-            <%= if device.id == :ups do %>
+            <%= if ups_device?(device) do %>
               <div class="grid gap-4 sm:grid-cols-3">
                 <.gauge
                   label="Battery"
@@ -652,6 +652,8 @@ defmodule NerveCenterWeb.DashboardLive do
   defp launchd_display_name(%{label: label}), do: label
 
   defp system_card?(device_id), do: device_id in [:hal9000, :kitt, :rosie, :zoidberg]
+
+  defp ups_device?(device), do: Map.get(device, :nut_device) != nil
 
   defp load_histories do
     Topology.display_devices()

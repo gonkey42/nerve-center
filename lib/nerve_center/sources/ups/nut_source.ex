@@ -42,10 +42,12 @@ defmodule NerveCenter.Sources.Ups.NUTSource do
 
   @impl true
   def normalize(raw, _context) do
+    # ups.load and input.voltage are optional: the macOS meta-driver
+    # (macosx-ups) reports only charge, runtime, battery voltage, and status.
     with {:ok, battery_charge} <- fetch_float(raw, "battery.charge"),
-         {:ok, battery_runtime} <- fetch_integer(raw, "battery.runtime"),
-         {:ok, ups_load} <- fetch_float(raw, "ups.load"),
-         {:ok, input_voltage} <- fetch_float(raw, "input.voltage") do
+         {:ok, battery_runtime} <- fetch_integer(raw, "battery.runtime") do
+      ups_load = fetch_optional_float(raw, "ups.load")
+      input_voltage = fetch_optional_float(raw, "input.voltage")
       status = Map.get(raw, "ups.status", "")
       status_tokens = String.split(status, " ", trim: true)
       current_load_watts = current_load_watts(raw, ups_load)
@@ -57,11 +59,12 @@ defmodule NerveCenter.Sources.Ups.NUTSource do
            [
              %{metric: :ups_battery_charge_ratio, value: battery_charge / 100},
              %{metric: :ups_battery_runtime_seconds, value: battery_runtime},
-             %{metric: :ups_load_ratio, value: ups_load / 100},
-             %{metric: :ups_input_voltage_volts, value: input_voltage},
              %{metric: :ups_on_battery_flag, value: flag(status_tokens, "OB")},
              %{metric: :ups_low_battery_flag, value: flag(status_tokens, "LB")}
-           ] ++ optional_metric(:ups_current_load_watts, current_load_watts),
+           ] ++
+             optional_metric(:ups_load_ratio, ups_load && ups_load / 100) ++
+             optional_metric(:ups_input_voltage_volts, input_voltage) ++
+             optional_metric(:ups_current_load_watts, current_load_watts),
          data: %{
            status: status,
            battery_charge_percent: battery_charge,
@@ -83,9 +86,10 @@ defmodule NerveCenter.Sources.Ups.NUTSource do
 
   defp current_load_watts(raw, ups_load) do
     fetch_optional_float(raw, "ups.realpower") ||
-      case fetch_optional_float(raw, "ups.realpower.nominal") do
-        nil -> nil
-        nominal_watts -> nominal_watts * ups_load / 100
+      case {fetch_optional_float(raw, "ups.realpower.nominal"), ups_load} do
+        {nil, _ups_load} -> nil
+        {_nominal_watts, nil} -> nil
+        {nominal_watts, ups_load} -> nominal_watts * ups_load / 100
       end
   end
 
