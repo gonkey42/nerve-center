@@ -1,0 +1,36 @@
+#!/bin/bash
+# Launch wrapper for com.claudebot.nerve-center.
+# Reads NerveCenter's secrets from the login Keychain (service "homelab"),
+# exports them, then execs the release. Holds no secret values and never
+# prints them. On a missing item it logs the account name only and exits.
+set -u
+REL=/Users/hal9000/NerveCenter/_build/prod/rel/nerve_center
+LOG=/Users/hal9000/claudebot/logs/nerve-center/launch.log
+
+load() {
+  local var=$1 acct=$2 val
+  if ! val=$(/usr/bin/security find-generic-password -w -s homelab -a "$acct" 2>/dev/null) || [ -z "$val" ]; then
+    printf '%s missing Keychain item homelab/%s (for %s)\n' "$(date -u +%FT%TZ)" "$acct" "$var" >>"$LOG" 2>/dev/null
+    exit 78
+  fi
+  export "$var=$val"
+}
+
+load SECRET_KEY_BASE               nervecenter_secret_key_base
+load RELEASE_COOKIE                nervecenter_release_cookie
+load HA_TOKEN                      nervecenter_ha_token
+load DAISY_SUPERVISOR_BRIDGE_TOKEN nervecenter_bridge_token
+load PIHOLE_APP_PASSWORD           nervecenter_pihole_app_password
+load IMMICH_API_KEY                nervecenter_immich_api_key
+load UNIFI_API_KEY                 nervecenter_unifi_api_key
+load NUT_USERNAME                  nervecenter_nut_username
+load NUT_PASSWORD                  nervecenter_nut_password
+load PLEX_TOKEN                    plex_token   # shared with the homelab skill
+
+export PHX_SERVER=true
+
+# NERVECENTER_LAUNCH_CHECK=1 verifies every item loads, then stops.
+if [ "${NERVECENTER_LAUNCH_CHECK:-}" = 1 ]; then echo "all Keychain items loaded"; exit 0; fi
+
+cd "$REL" || exit 78
+exec "$REL/bin/nerve_center" "${@:-start}"
