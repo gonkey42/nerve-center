@@ -1,5 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  This plist holds no secrets. launchd runs deploy/nervecenter-launch, which
+  reads each secret from the macOS login Keychain (service "homelab"),
+  exports it, and execs the release.
+
+  Install:
+    1. Copy deploy/nervecenter-launch to ~/.config/homelab/bin/ (mode 0700).
+    2. Create one Keychain item per account listed in that script:
+         security add-generic-password -U -s homelab -a <account> -w
+       (-w as the last option prompts for the value, so it stays out of
+       shell history).
+    3. Check that every item loads without starting the app:
+         NERVECENTER_LAUNCH_CHECK=1 ~/.config/homelab/bin/nervecenter-launch
+    4. Copy this file to ~/Library/LaunchAgents/com.claudebot.nerve-center.plist
+       and load it:
+         launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.claudebot.nerve-center.plist
+
+  After changing a Keychain item:
+    launchctl kickstart -k gui/$(id -u)/com.claudebot.nerve-center
+  After changing this plist, use bootout then bootstrap. kickstart does not
+  reload it.
+-->
 <plist version="1.0">
 <dict>
   <key>Label</key>
@@ -7,7 +29,7 @@
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/hal9000/NerveCenter/_build/prod/rel/nerve_center/bin/nerve_center</string>
+    <string>/Users/hal9000/.config/homelab/bin/nervecenter-launch</string>
     <string>start</string>
   </array>
 
@@ -18,26 +40,6 @@
   <dict>
     <key>PHX_SERVER</key>
     <string>true</string>
-    <key>SECRET_KEY_BASE</key>
-    <string>REPLACE_ME</string>
-    <key>RELEASE_COOKIE</key>
-    <string>REPLACE_ME</string>
-    <key>PIHOLE_APP_PASSWORD</key>
-    <string>REPLACE_ME</string>
-    <key>IMMICH_API_KEY</key>
-    <string>REPLACE_ME</string>
-    <key>HA_TOKEN</key>
-    <string>REPLACE_ME</string>
-    <key>DAISY_SUPERVISOR_BRIDGE_TOKEN</key>
-    <string>REPLACE_ME</string>
-    <key>UNIFI_API_KEY</key>
-    <string>REPLACE_ME</string>
-    <key>PLEX_TOKEN</key>
-    <string>REPLACE_ME</string>
-    <key>NUT_USERNAME</key>
-    <string>REPLACE_ME</string>
-    <key>NUT_PASSWORD</key>
-    <string>REPLACE_ME</string>
   </dict>
 
   <key>KeepAlive</key>
