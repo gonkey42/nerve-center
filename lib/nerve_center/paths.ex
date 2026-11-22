@@ -17,6 +17,14 @@ defmodule NerveCenter.Paths do
     fetch!(:app_log)
   end
 
+  # Number of backups to keep after a successful backup. Always at least 1.
+  def backup_keep do
+    case Application.get_env(:nerve_center, :backup_keep, 1) do
+      keep when is_integer(keep) and keep >= 1 -> keep
+      _ -> 1
+    end
+  end
+
   def backup_path(suffix \\ timestamp_suffix()) do
     Path.join(backup_dir(), "nerve_center-#{suffix}.sqlite3")
   end

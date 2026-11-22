@@ -30,6 +30,13 @@ if config_env() == :prod do
   backup_dir =
     System.get_env("NERVE_CENTER_BACKUP_DIR") || Path.join(data_dir, "backups")
 
+  # Values below 1 or not a number fall back to 1, so pruning never removes every backup.
+  backup_keep =
+    case Integer.parse(String.trim(System.get_env("NERVE_CENTER_BACKUP_KEEP") || "")) do
+      {keep, ""} when keep >= 1 -> keep
+      _ -> 1
+    end
+
   app_log =
     System.get_env("NERVE_CENTER_APP_LOG") ||
       Path.join(
@@ -47,6 +54,8 @@ if config_env() == :prod do
     backups: backup_dir,
     log_dir: log_dir,
     app_log: app_log
+
+  config :nerve_center, :backup_keep, backup_keep
 
   config :nerve_center, NerveCenter.Repo,
     database: db_path,
